@@ -51,6 +51,35 @@ assert.equal(rule.result.from, grammar.indexOf('Person:'));
 const formatted = await call('format', grammar.replace('entry Model: ', 'entry    Model:'), 0, { target: 'grammar' });
 assert.ok(formatted.result.length > 0);
 
+// User code: a validator and a generator in TypeScript, erased and run inside the worker.
+const validator = `import type { ValidationAcceptor } from 'langium';
+export function registerValidationChecks(services: any) {
+    services.validation.ValidationRegistry.register({ Person: services.validation.HelloWorldValidator.check }, services.validation.HelloWorldValidator);
+}
+export class HelloWorldValidator {
+    check(person: { name: string }, accept: ValidationAcceptor): void {
+        if (person.name === 'Bob') accept('warning', 'Not Bob again.', { node: person as any, property: 'name' });
+    }
+}`;
+const generator = `import { isGreeting } from './generated/ast.js';
+import { AstUtils } from 'langium';
+export function generate(model: any): string {
+    return AstUtils.streamAllContents(model).filter(isGreeting).map(g => 'Hello, ' + g.person.ref?.name).join(';');
+}`;
+const withCode = await call('grammar', grammar, 0, { validator, generator });
+assert.equal(withCode.result.ok && withCode.result.validator.length === 0 && withCode.result.generator.length === 0, true, JSON.stringify(withCode));
+const run = await call('program', 'person Bob\nperson Alice\nHello Alice !\nHello Bob !\n', 0, { name: 'x.hello' });
+assert.equal(run.result.problems.map(x => `${x.line}:${x.col} ${x.severity} ${x.message}`).join(), '1:8 warning Not Bob again.');
+assert.equal(run.result.generated, 'ok');
+assert.equal(run.result.output.result, 'Hello, Alice;Hello, Bob');
+const broken = await call('grammar', grammar, 0, { validator: 'export function registerValidationChecks( {' });
+assert.equal(broken.result.ok, false);
+assert.equal(broken.result.validator[0].line, 1);
+const thrown = await call('grammar', grammar, 0, { generator: 'export function generate(m: any) {\n    return m.nothing.here;\n}' });
+const failed = await call('program', 'person Alice\n');
+assert.equal(`${failed.result.generated} line ${failed.result.generatorProblems[0].line}`, 'failed line 2', JSON.stringify(failed.result.generatorProblems));
+console.log('  ok 3 embedded worker: TypeScript validator and generator run, errors in them are located');
+
 const bad = await call('grammar', grammar.replace('name=ID', 'name=IDD'));
 assert.equal(bad.result.ok, false);
 const refused = await call('program', 'person Alice\n');

@@ -21,11 +21,20 @@
 
 <main id="cols">
   <section class="panel" id="grammar-panel" aria-label="Grammar">
-    <div class="head"><h2>Grammar</h2><span class="chip" id="grammar-chip"></span>
+    <div class="head">
+      <div class="tabs" role="tablist" aria-label="Files of the language">
+        <div class="tab" role="tab" tabindex="0" aria-selected="true" data-left="grammar" title="The grammar (Langium)"><span class="dot"></span><span>Grammar</span></div>
+        <div class="tab" role="tab" tabindex="0" aria-selected="false" data-left="validator" title="Checks that the grammar cannot express (TypeScript)"><span class="dot"></span><span>Validator</span></div>
+        <div class="tab" role="tab" tabindex="0" aria-selected="false" data-left="generator" title="From the AST of a program to text or files (TypeScript)"><span class="dot"></span><span>Generator</span></div>
+      </div>
+      <span class="chip" id="grammar-chip"></span>
       <span class="grow"></span>
       <button id="format" class="ghost" title="Format the grammar (Shift-Alt-F)">Format</button>
     </div>
+    <div class="banner" id="consent" hidden>This shared link contains code (a validator or a generator). It has not been run: read it first. <button id="consent-run">Run the code</button></div>
     <div class="editor" id="grammar-editor"></div>
+    <div class="editor" id="validator-editor" hidden></div>
+    <div class="editor" id="generator-editor" hidden></div>
     <div class="problems" id="grammar-problems"></div>
   </section>
   <div class="split" data-split="0" role="separator" aria-orientation="vertical"></div>
@@ -35,13 +44,13 @@
     <div class="problems" id="program-problems"></div>
   </section>
   <div class="split" data-split="1" role="separator" aria-orientation="vertical"></div>
-  <section class="panel" id="ast-panel" aria-label="Syntax tree">
-    <div class="head"><h2>Syntax tree</h2><span class="chip" id="ast-chip"></span>
+  <section class="panel" id="ast-panel" aria-label="Syntax tree and generator output">
+    <div class="head"><h2>Result</h2><span class="chip" id="ast-chip"></span>
       <span class="grow"></span>
       <div class="seg" role="group" aria-label="View">
-        <button id="view-tree" aria-pressed="true">Tree</button><button id="view-json" aria-pressed="false">JSON</button>
+        <button id="view-tree" aria-pressed="true">Tree</button><button id="view-json" aria-pressed="false">JSON</button><button id="view-output" aria-pressed="false" title="What the generator produces from this program">Output</button>
       </div>
-      <button id="copy-json" class="ghost" title="Copy the AST as JSON">Copy</button>
+      <button id="copy-json" class="ghost" title="Copy what is shown (the AST as JSON, or the output)">Copy</button>
     </div>
     <div class="ast" id="ast"></div>
   </section>

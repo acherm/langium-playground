@@ -1,5 +1,7 @@
 // The examples of the course, copied from https://github.com/acherm/dsl-langium (Langium 4.4).
-export interface Example { name: string; grammar: string; programs: { name: string; text: string }[] }
+import { CHUNO_GENERATOR, CHUNO_VALIDATOR, HELLO_GENERATOR, HELLO_VALIDATOR } from './example-code.ts';
+
+export interface Example { name: string; grammar: string; programs: { name: string; text: string }[]; validator?: string; generator?: string }
 
 export const EXAMPLES: Example[] = [
     {
@@ -165,4 +167,9 @@ win by checkmate
 `,
         },
     ],
+    validator: CHUNO_VALIDATOR,
+    generator: CHUNO_GENERATOR,
 });
+
+EXAMPLES[0].validator = HELLO_VALIDATOR;
+EXAMPLES[0].generator = HELLO_GENERATOR;

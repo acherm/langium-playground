@@ -5,6 +5,9 @@
 // other than what Langium does by default (lexing, parsing, linking).
 import { EmptyFileSystem, GrammarAST, URI, type LangiumDocument } from 'langium';
 import { createLangiumGrammarServices, createServicesForGrammar } from 'langium/grammar';
+import { exportedClasses, generatorFunction, load, locate as locateInCode, newOutput, runGenerator, type Environment, type Output } from './usercode.ts';
+
+export type { Output } from './usercode.ts';
 
 export type Severity = 'error' | 'warning' | 'info';
 export interface Problem {
@@ -17,11 +20,17 @@ export interface Problem {
     message: string;
 }
 export interface GrammarResult {
-    ok: boolean;        // true when a parser could be built
+    ok: boolean;        // true when programs can be analysed: parser built, validator loaded
     name: string;
+    entry: string;      // name of the entry rule
     rules: number;
     problems: Problem[];
+    /** Problems in the user's validator and generator code (positions are in that code). */
+    validator: Problem[];
+    generator: Problem[];
 }
+/** The TypeScript written next to the grammar. An empty text means: none. */
+export interface UserCode { validator?: string; generator?: string }
 /** [offset, length, class, token type name] */
 export type Token = [number, number, string, string];
 export interface ProgramResult {
@@ -31,6 +40,11 @@ export interface ProgramResult {
     tokens: Token[];
     /** What the parser reported about the grammar while analysing this program (ambiguities). */
     grammarWarnings: Problem[];
+    /** none: no generator. skipped: the program has errors. failed: the generator threw. */
+    generated: 'none' | 'skipped' | 'ok' | 'failed';
+    output?: Output;
+    /** Where the generator failed on this program (positions are in the generator code). */
+    generatorProblems: Problem[];
 }
 export interface Completion {
     label: string;
@@ -44,7 +58,11 @@ export interface Completion {
 type Services = Awaited<ReturnType<typeof createServicesForGrammar>>;
 
 const grammarServices = createLangiumGrammarServices(EmptyFileSystem).grammar;
-let current: { text: string; grammar: GrammarAST.Grammar; services: Services; terminals: Set<string>; ext: string } | undefined;
+let current: {
+    text: string; grammar: GrammarAST.Grammar; services: Services; terminals: Set<string>; ext: string;
+    env: Environment;
+    generator?: { run: (...args: any[]) => unknown; code: string };
+} | undefined;
 let counter = 0;
 
 const SOURCES: Record<string, string> = {
@@ -117,18 +135,39 @@ function positioned(text: string, range: { from: number; to: number }, severity:
     return { ...range, line, col: range.from - before.lastIndexOf('\n'), severity, source, message };
 }
 
-export async function analyzeGrammar(text: string): Promise<GrammarResult> {
+/** A problem in user code, from the line and column where it was found. */
+function inCode(code: string, error: unknown, file: string, source: string, severity: Severity = 'error'): Problem {
+    const at = locateInCode(error, file, code);
+    const lines = code.split('\n');
+    const from = lines.slice(0, at.line - 1).reduce((n, l) => n + l.length + 1, 0) + Math.min(at.col - 1, lines[at.line - 1]?.length ?? 0);
+    const to = lines.slice(0, at.line).reduce((n, l) => n + l.length + 1, 0) - 1;
+    return { from, to: Math.max(from, to), line: at.line, col: at.col, severity, source, message: at.message };
+}
+
+export async function analyzeGrammar(text: string, code: UserCode = {}): Promise<GrammarResult> {
     forget('program');
     current = undefined;
     const { doc } = await documentOf('grammar', text);
     const grammar = doc.parseResult.value as GrammarAST.Grammar;
     const problems = problemsOf(doc, 'grammar');
-    const result: GrammarResult = { ok: false, name: grammar.name ?? '', rules: grammar.rules?.length ?? 0, problems };
+    const entry = grammar.rules?.find(r => GrammarAST.isParserRule(r) && r.entry)?.name ?? '';
+    const result: GrammarResult = { ok: false, name: grammar.name ?? '', entry, rules: grammar.rules?.length ?? 0, problems, validator: [], generator: [] };
     if (problems.some(p => p.severity === 'error')) return result;
+
+    // The validator file is evaluated first: the classes it exports become services of the language
+    // (`services.validation.XValidator`), exactly as the module of a Langium project declares them.
+    const env: Environment = { output: newOutput() };
+    const validatorCode = code.validator?.trim() ? code.validator : '';
+    let validator: Record<string, any> | undefined;
+    if (validatorCode) {
+        try { validator = load(validatorCode, 'validator.ts', env).exports; }
+        catch (e) { result.validator.push(inCode(validatorCode, e, 'validator.ts', 'validator')); }
+    }
+    const module = { validation: Object.fromEntries(exportedClasses(validator ?? {}).map(([name, Class]) => [name, (services: unknown) => new Class(services)])) };
 
     // Build the lexer and the parser now: this is where Chevrotain rejects a grammar.
     const built = await capturing(async () => {
-        const services = await createServicesForGrammar({ grammar: text });
+        const services = await createServicesForGrammar({ grammar: text, module: module as any });
         void services.parser.Lexer;
         void services.parser.LangiumParser;
         services.parser.LangiumParser.parse('');
@@ -143,8 +182,31 @@ export async function analyzeGrammar(text: string): Promise<GrammarResult> {
         return result;
     }
     const services = built.value;
+    env.reflection = services.shared.AstReflection;
+
+    if (validator) {
+        if (typeof validator.registerValidationChecks !== 'function') {
+            result.validator.push(inCode(validatorCode, 'This file exports no function `registerValidationChecks(services)`: nothing is checked.', 'validator.ts', 'validator', 'warning'));
+        } else {
+            try { validator.registerValidationChecks(services); }
+            catch (e) { result.validator.push(inCode(validatorCode, e, 'validator.ts', 'validator')); }
+        }
+    }
+    // A validator that does not load would let programs pass that it should reject: nothing is analysed.
+    if (result.validator.some(p => p.severity === 'error')) return result;
+
+    let generator: { run: (...args: any[]) => unknown; code: string } | undefined = undefined;
+    const generatorCode = code.generator?.trim() ? code.generator : '';
+    if (generatorCode) {
+        try {
+            const run = generatorFunction(load(generatorCode, 'generator.ts', env).exports);
+            if (run) generator = { run, code: generatorCode };
+            else result.generator.push(inCode(generatorCode, 'No generator function found. Export one function, or name it generate... (also accepted: compile..., transform..., interpret..., run..., toSomething, or a default export). It receives the root of the AST.', 'generator.ts', 'generator'));
+        } catch (e) { result.generator.push(inCode(generatorCode, e, 'generator.ts', 'generator')); }
+    }
+
     const terminals = new Set(grammar.rules.filter(GrammarAST.isTerminalRule).map(r => r.name));
-    current = { text, grammar, services, terminals, ext: services.LanguageMetaData.fileExtensions[0] ?? '.txt' };
+    current = { text, grammar, services, terminals, ext: services.LanguageMetaData.fileExtensions[0] ?? '.txt', env, generator };
     result.ok = true;
     return result;
 }
@@ -196,9 +258,9 @@ function classify(type: string, image: string, terminals: Set<string>, hidden: b
     return 'terminal';
 }
 
-export async function analyzeProgram(text: string): Promise<ProgramResult> {
+export async function analyzeProgram(text: string, name = 'program'): Promise<ProgramResult> {
     if (!current) throw new Error('No valid grammar.');
-    const { terminals, services } = current;
+    const { terminals, services, generator, env } = current;
     const run = await capturing(async () => {
         const { doc } = await documentOf('program', text);
         const lexed = services.parser.Lexer.tokenize(text);
@@ -211,7 +273,23 @@ export async function analyzeProgram(text: string): Promise<ProgramResult> {
         }
         tokens.sort((a, b) => a[0] - b[0]);
         const ast = services.serializer.JsonSerializer.serialize(doc.parseResult.value, { textRegions: true, refText: true });
-        return { problems: problemsOf(doc, 'validation'), ast, tokens };
+        const problems = problemsOf(doc, 'validation');
+
+        // The generator runs on a valid program only, as the command line of a Langium project does.
+        let generated: ProgramResult['generated'] = 'none', output: Output | undefined;
+        const generatorProblems: Problem[] = [];
+        if (generator) {
+            if (problems.some(p => p.severity === 'error')) generated = 'skipped';
+            else {
+                try { output = await runGenerator(generator.run, doc.parseResult.value, name, env); generated = 'ok'; }
+                catch (e) {
+                    generated = 'failed';
+                    output = env.output;          // what was printed and written before the failure
+                    generatorProblems.push(inCode(generator.code, e, 'generator.ts', 'generator'));
+                }
+            }
+        }
+        return { problems, ast, tokens, generated, output, generatorProblems };
     });
     if (run.error || !run.value) throw run.error ?? new Error('Analysis failed.');
     const { text: grammarText, grammar } = current!;

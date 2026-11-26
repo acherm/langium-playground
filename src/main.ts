@@ -6,6 +6,7 @@
 //   3. when the grammar is invalid, programs are not analysed and the page says so.
 import { autocompletion, type CompletionContext, type CompletionResult } from '@codemirror/autocomplete';
 import { indentWithTab } from '@codemirror/commands';
+import { javascript } from '@codemirror/lang-javascript';
 import { StreamLanguage, syntaxHighlighting } from '@codemirror/language';
 import { setDiagnostics, type Diagnostic } from '@codemirror/lint';
 import { EditorState, Prec, StateEffect, StateField, type Extension, type TransactionSpec } from '@codemirror/state';
@@ -100,7 +101,7 @@ interface Tab {
 const grammar = { rev: 0, dirty: true, result: undefined as GrammarResult | undefined, resultRev: -1, failure: '' };
 let tabs: Tab[] = [];
 let active = 0;
-let astView: 'tree' | 'json' = 'tree';
+let astView: 'tree' | 'json' | 'output' = 'tree';
 let busy = false;
 let timer = 0;
 let builtIn = -1;                // value of engine.restarts when the grammar was last built
@@ -338,6 +339,26 @@ const grammarView = new EditorView({
     }),
 });
 
+// The validator and the generator: TypeScript, written as in a Langium project. A change there is
+// handled like a change of the grammar: the language is rebuilt and every program analysed again.
+const codeView = (host: string) => new EditorView({
+    parent: $(host),
+    state: EditorState.create({
+        extensions: [common, javascript({ typescript: true }), EditorView.updateListener.of(u => {
+            if (!u.docChanged) return;
+            grammar.rev++; grammar.dirty = true;
+            schedule(500);
+        })],
+    }),
+});
+type Left = 'grammar' | 'validator' | 'generator';
+const leftViews: Record<Left, EditorView> = { grammar: grammarView, validator: codeView('validator-editor'), generator: codeView('generator-editor') };
+const LEFT: Left[] = ['grammar', 'validator', 'generator'];
+let left: Left = 'grammar';
+/** False for code that came with a share link, until the user agrees to run it. */
+let codeAllowed = true;
+const codeOf = (side: 'validator' | 'generator') => leftViews[side].state.doc.toString();
+
 const programExtensions: Extension = [common, tokenField, highlightField, tokenTooltip, features('program'),
     EditorView.updateListener.of(u => {
         const t = tab();
@@ -386,11 +407,12 @@ async function pump() {
                 const rev = grammar.rev;
                 let result: GrammarResult | undefined, failure = '';
                 try {
-                    result = await engine.call<GrammarResult>('grammar', grammarView.state.doc.toString(), GRAMMAR_TIMEOUT);
+                    result = await engine.call<GrammarResult>('grammar', grammarView.state.doc.toString(), GRAMMAR_TIMEOUT,
+                        codeAllowed ? { validator: codeOf('validator'), generator: codeOf('generator') } : {});
                     builtIn = engine.restarts;
                 } catch (e) {
                     failure = e instanceof TimeoutError
-                        ? `The grammar could not be analysed in ${GRAMMAR_TIMEOUT / 1000} s. The analyser was restarted; edit the grammar to try again.`
+                        ? `The grammar (with its validator and generator) could not be loaded in ${GRAMMAR_TIMEOUT / 1000} s. The analyser was restarted; edit the grammar or the code to try again.`
                         : `The analyser failed on this grammar: ${(e as Error).message}`;
                 }
                 if (rev !== grammar.rev) continue;          // edited meanwhile: this result is stale
@@ -406,7 +428,7 @@ async function pump() {
             const rev = t.rev, grev = grammar.rev, key = `${grev}:${rev}`;
             if (t.failedKey === key) continue;              // already failed on exactly this input
             try {
-                const result = await engine.call<ProgramResult>('program', textOf(t), PROGRAM_TIMEOUT);
+                const result = await engine.call<ProgramResult>('program', textOf(t), PROGRAM_TIMEOUT, { name: t.name });
                 if (!tabs.includes(t) || rev !== t.rev || grev !== grammar.rev) continue;
                 t.result = result; t.resultRev = rev; t.resultGrammarRev = grev; t.failure = undefined; t.failedKey = undefined;
                 apply(t, { effects: setTokens.of(result.tokens) });
@@ -416,7 +438,7 @@ async function pump() {
                 if (!tabs.includes(t) || rev !== t.rev || grev !== grammar.rev) continue;
                 t.failedKey = key;
                 t.failure = timeout
-                    ? `This program could not be analysed in ${PROGRAM_TIMEOUT / 1000} s (a terminal regular expression that backtracks a lot, or a loop in the grammar). The analyser was restarted; edit the program or the grammar to try again.`
+                    ? `This program could not be analysed in ${PROGRAM_TIMEOUT / 1000} s (a terminal regular expression that backtracks a lot, a loop in the grammar, or a loop in the validator or the generator). The analyser was restarted; edit the program, the grammar or the code to try again.`
                     : `The analyser failed on this program: ${(e as Error).message}`;
                 apply(t, setDiagnostics(t.state, []));
             }
@@ -466,18 +488,104 @@ function grammarProblems(): Problem[] {
     return [...own, ...extra].sort((a, b) => a.from - b.from);
 }
 
+/** Generator problems: when it was loaded, plus where it failed on a program. */
+function generatorProblems(): Problem[] {
+    const seen = new Set<string>();
+    const runtime = tabs.filter(fresh).flatMap(t => t.result!.generatorProblems).filter(p => !seen.has(p.line + p.message) && !!seen.add(p.line + p.message));
+    return [...(grammar.result?.generator ?? []), ...runtime];
+}
+
+const worst = (problems: Problem[]): '' | 'ok' | 'warning' | 'error' =>
+    problems.some(p => p.severity === 'error') ? 'error' : problems.some(p => p.severity === 'warning') ? 'warning' : 'ok';
+
+/** A file to start from, with the names of the grammar on screen. */
+function starter(side: 'validator' | 'generator'): string {
+    const name = grammar.result?.name || 'My', entry = grammar.result?.entry || 'Model';
+    return side === 'validator' ? `import type { ValidationAcceptor, ValidationChecks } from 'langium';
+import type { ${name}AstType, ${entry} } from './generated/ast.js';
+
+/**
+ * Register custom validation checks: for each type of node, the method that checks it.
+ */
+export function registerValidationChecks(services: any) {
+    const registry = services.validation.ValidationRegistry;
+    const validator = services.validation.${name}Validator;
+    const checks: ValidationChecks<${name}AstType> = {
+        ${entry}: validator.check${entry}
+    };
+    registry.register(checks, validator);
+}
+
+/**
+ * What the grammar cannot say.
+ */
+export class ${name}Validator {
+
+    check${entry}(node: ${entry}, accept: ValidationAcceptor): void {
+        // accept('warning', 'Something to say about this node.', { node });
+    }
+}
+` : `import type { ${entry} } from './generated/ast.js';
+import { expandToString } from 'langium/generate';
+
+/**
+ * Receives the root of the AST of a valid program. What it returns is shown in "Output".
+ */
+export function generate(model: ${entry}): string {
+    return expandToString\`
+        A \${model.$type}.
+    \`;
+}
+`;
+}
+
 function renderGrammar() {
+    for (const side of LEFT) {
+        const dot = document.querySelector<HTMLElement>(`[data-left="${side}"] .dot`)!;
+        if (grammar.resultRev !== grammar.rev) continue;
+        const problems = side === 'grammar' ? grammarProblems() : side === 'validator' ? grammar.result?.validator ?? [] : generatorProblems();
+        const view = leftViews[side];
+        view.dispatch(setDiagnostics(view.state, toDiagnostics(problems, view.state.doc.length)));
+        const empty = side !== 'grammar' && !view.state.doc.toString().trim();
+        dot.className = 'dot ' + (empty || !grammar.result || (side !== 'grammar' && !codeAllowed) ? '' : worst(problems));
+        if (side !== left) continue;
+        const host = $('grammar-problems');
+        if (side !== 'grammar' && empty) {
+            // Nothing written yet: say what this file is for, and offer a starting point.
+            host.replaceChildren(el('div', 'none', side === 'validator'
+                ? 'No validator. A validator checks what the grammar cannot say; its errors and warnings appear in the programs.'
+                : 'No generator. A generator receives the AST of a valid program and produces text or files, shown in "Output".'));
+            const b = el('button', 'starter', 'Insert a starting point');
+            b.onclick = () => { view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: starter(side) } }); view.focus(); };
+            host.firstElementChild!.append(' ', b);
+            continue;
+        }
+        const okText = side !== 'grammar' && !codeAllowed ? `This ${side} has not been run yet.` : `No problem in the ${side}.`;
+        problemList(host, problems, view, okText, grammar.failure || undefined);
+    }
+    $('consent').hidden = codeAllowed;
     if (grammar.resultRev !== grammar.rev) return;
     const problems = grammarProblems();
-    const len = grammarView.state.doc.length;
-    grammarView.dispatch(setDiagnostics(grammarView.state, toDiagnostics(problems, len)));
-    problemList($('grammar-problems'), problems, grammarView, 'No problem in the grammar.', grammar.failure || undefined);
     const errors = problems.filter(p => p.severity === 'error').length, warnings = problems.filter(p => p.severity === 'warning').length;
     const r = grammar.result;
     if (!r) chip($('grammar-chip'), 'error', 'not analysed');
     else if (errors) chip($('grammar-chip'), 'error', count(errors, 'error'));
     else if (warnings) chip($('grammar-chip'), 'warning', `${r.name} · ${count(warnings, 'warning')}`);
     else chip($('grammar-chip'), 'ok', `✓ ${r.name} · ${count(r.rules, 'rule')}`);
+}
+
+function selectLeft(side: Left) {
+    left = side;
+    for (const s of LEFT) {
+        $(`${s}-editor`).hidden = s !== side;
+        document.querySelector(`[data-left="${s}"]`)!.setAttribute('aria-selected', String(s === side));
+    }
+    $('format').hidden = side !== 'grammar';
+    $('download-grammar').textContent = `Download ${side}`;
+    leftViews[side].requestMeasure();
+    $('grammar-problems').replaceChildren();
+    renderGrammar();
+    leftViews[side].focus();
 }
 
 function statusOf(t: Tab): '' | 'ok' | 'warning' | 'error' {
@@ -536,7 +644,8 @@ function renderProgram() {
     const previous = shown;
     shown = t;
     if (!grammarPending && !grammar.result?.ok) {
-        problemList(host, [], programView, '', 'The grammar has errors: programs are not analysed until it is fixed.');
+        const blocker = grammar.result?.validator.some(p => p.severity === 'error') ? 'validator' : 'grammar';
+        problemList(host, [], programView, '', `The ${blocker} has errors: programs are not analysed until it is fixed.`);
         ast.classList.add('stale');
         renderAst(t, 'The grammar has errors. This tree comes from an earlier analysis.');
         chip($('ast-chip'), 'error', 'out of date');
@@ -582,6 +691,7 @@ function countNodes(v: any): number {
 function renderAst(t: Tab, banner: string) {
     const host = $('ast');
     host.replaceChildren();
+    if (astView === 'output') { renderOutput(t, host, banner); return; }
     if (banner) host.append(el('div', 'banner', banner));
     if (!t.result) return;
     const root = JSON.parse(t.result.ast);
@@ -592,6 +702,35 @@ function renderAst(t: Tab, banner: string) {
     const openDepth = countNodes(root) > 1500 ? 2 : Infinity;
     host.append(renderValue(t, '', root, '', 0, openDepth, root.$textRegion));
     if (programView.hasFocus) syncCursor();
+}
+
+/** What the generator made of this program: the files it wrote, what it returned, what it printed. */
+function outputText(t: Tab): string {
+    const o = t.result?.output;
+    if (!o) return '';
+    return [...o.files.map(f => `// ${f.path}\n${f.content}`), o.result ?? '', o.console.join('\n')].filter(Boolean).join('\n\n');
+}
+
+function renderOutput(t: Tab, host: HTMLElement, staleBanner: string) {
+    const r = t.result;
+    const stale = host.classList.contains('stale');
+    if (stale && staleBanner) host.append(el('div', 'banner', staleBanner.replace('tree', 'output')));
+    if (!r) return;
+    const note = (text: string) => host.append(el('div', 'note', text));
+    const block = (title: string, text: string) => {
+        const box = el('div', 'file');
+        box.append(el('div', 'file-name', title), el('pre', '', text));
+        host.append(box);
+    };
+    if (r.generated === 'none') { note(codeAllowed ? 'No generator. Write one in the "Generator" tab, on the left: a function that receives the AST of the program and returns a text, or writes files.' : 'The generator of this shared link has not been run.'); return; }
+    if (r.generated === 'skipped') { note('The program has errors: the generator was not run.'); return; }
+    if (r.generated === 'failed') host.append(el('div', 'banner', `The generator failed: ${r.generatorProblems[0]?.message ?? 'unknown error'} (generator, line ${r.generatorProblems[0]?.line ?? '?'})`));
+    const o = r.output;
+    if (!o) return;
+    for (const f of o.files) block(f.path, f.content);
+    if (o.result !== undefined) block(o.files.length ? 'returned value' : 'result', o.result);
+    if (o.console.length) block('console', o.console.join('\n'));
+    if (r.generated === 'ok' && !o.files.length && o.result === undefined && !o.console.length) note('The generator returned nothing, wrote no file and printed nothing.');
 }
 
 function mark(e: HTMLElement, region?: Region) {
@@ -666,10 +805,16 @@ function syncCursor() {
 
 // ---------------------------------------------------------------- saving, sharing, examples
 
-interface Saved { g: string; p: { n: string; t: string }[]; a: number }
+/** g: grammar, v: validator, x: generator, p: programs, a: active program, c: false = code not yet agreed to. */
+interface Saved { g: string; v?: string; x?: string; p: { n: string; t: string }[]; a: number; c?: boolean }
 const KEY = 'langium-playground-standalone:v1';
 
-const snapshot = (): Saved => ({ g: grammarView.state.doc.toString(), p: tabs.map(t => ({ n: t.name, t: textOf(t) })), a: active });
+const snapshot = (): Saved => ({
+    g: grammarView.state.doc.toString(), v: codeOf('validator'), x: codeOf('generator'),
+    p: tabs.map(t => ({ n: t.name, t: textOf(t) })), a: active, ...(codeAllowed ? {} : { c: false }),
+});
+const fromExample = (ex: (typeof EXAMPLES)[number]): Saved =>
+    ({ g: ex.grammar, v: ex.validator ?? '', x: ex.generator ?? '', p: ex.programs.map(p => ({ n: p.name, t: p.text })), a: 0 });
 
 function save() {
     try { localStorage.setItem(KEY, JSON.stringify(snapshot())); } catch { /* private mode: nothing to do */ }
@@ -680,7 +825,12 @@ function load(s: Saved) {
     active = Math.min(Math.max(0, s.a | 0), tabs.length - 1);
     grammar.result = undefined;
     shown = undefined;
-    grammarView.dispatch({ changes: { from: 0, to: grammarView.state.doc.length, insert: String(s.g ?? '') } });
+    codeAllowed = s.c !== false;
+    $('consent').hidden = codeAllowed;
+    for (const [side, text] of [['grammar', s.g], ['validator', s.v], ['generator', s.x]] as const) {
+        const view = leftViews[side];
+        view.dispatch({ changes: { from: 0, to: view.state.doc.length, insert: String(text ?? '') } });
+    }
     grammar.rev++; grammar.dirty = true;
     programView.setState(tab().state);
     $('ast').replaceChildren(); $('program-problems').replaceChildren(); $('grammar-problems').replaceChildren();
@@ -740,7 +890,19 @@ $<HTMLSelectElement>('examples').onchange = e => {
     const select = e.target as HTMLSelectElement;
     const ex = EXAMPLES[Number(select.value)];
     select.value = '';
-    if (ex) replaceWith({ g: ex.grammar, p: ex.programs.map(p => ({ n: p.name, t: p.text })), a: 0 }, `Example "${ex.name}" loaded.`);
+    if (ex) replaceWith(fromExample(ex), `Example "${ex.name}" loaded.`);
+};
+for (const side of LEFT) {
+    const b = document.querySelector<HTMLElement>(`[data-left="${side}"]`)!;
+    b.onclick = () => selectLeft(side);
+    b.onkeydown = e => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); selectLeft(side); } };
+}
+// Code that came with a share link runs only once the reader has agreed.
+$('consent-run').onclick = () => {
+    codeAllowed = true;
+    grammar.rev++; grammar.dirty = true;
+    renderGrammar();
+    schedule(0);
 };
 $('add-tab').onclick = () => {
     let n = tabs.length + 1;
@@ -749,25 +911,25 @@ $('add-tab').onclick = () => {
     select(tabs.length - 1);
     schedule(0);
 };
-$('download-grammar').onclick = () => download(`${grammar.result?.name || 'grammar'}.langium`, grammarView.state.doc.toString());
+$('download-grammar').onclick = () => download(left === 'grammar' ? `${grammar.result?.name || 'grammar'}.langium` : `${left}.ts`, leftViews[left].state.doc.toString());
 $('download-program').onclick = () => download(/\.\w+$/.test(tab().name) ? tab().name : `${tab().name}.txt`, textOf(tab()));
 $('share').onclick = async () => {
     const url = `${location.href.split('#')[0]}#s=${await pack(snapshot())}`;
-    try { await navigator.clipboard.writeText(url); toast('Link copied. It contains the grammar and the programs.'); }
+    try { await navigator.clipboard.writeText(url); toast('Link copied. It contains the grammar, the validator, the generator and the programs.'); }
     catch { prompt('Copy this link', url); }
 };
 $('format').onclick = () => formatText(grammarView, 'grammar');
 $('copy-json').onclick = async () => {
     const t = tab();
-    if (!t.result) return;
-    const json = JSON.stringify(JSON.parse(t.result.ast), (k, v) => k === '$textRegion' ? undefined : v, 2);
-    try { await navigator.clipboard.writeText(json); toast('AST copied as JSON.'); } catch { toast('The browser refused to copy.'); }
+    if (!t.result || !fresh(t)) return;
+    const text = astView === 'output' ? outputText(t) : JSON.stringify(JSON.parse(t.result.ast), (k, v) => k === '$textRegion' ? undefined : v, 2);
+    try { await navigator.clipboard.writeText(text); toast(astView === 'output' ? 'Output copied.' : 'AST copied as JSON.'); } catch { toast('The browser refused to copy.'); }
 };
-for (const view of ['tree', 'json'] as const) {
+const VIEWS = ['tree', 'json', 'output'] as const;
+for (const view of VIEWS) {
     $(`view-${view}`).onclick = () => {
         astView = view;
-        $('view-tree').setAttribute('aria-pressed', String(view === 'tree'));
-        $('view-json').setAttribute('aria-pressed', String(view === 'json'));
+        for (const v of VIEWS) $(`view-${v}`).setAttribute('aria-pressed', String(v === view));
         renderProgram();
     };
 }
@@ -794,15 +956,18 @@ for (const handle of document.querySelectorAll<HTMLElement>('.split')) {
 
 // Start: a shared link wins over what this browser remembers, which wins over the first example.
 (async () => {
-    const first = EXAMPLES[0];
-    const fallback: Saved = { g: first.grammar, p: first.programs.map(p => ({ n: p.name, t: p.text })), a: 0 };
     let stored: Saved | undefined;
     try { stored = JSON.parse(localStorage.getItem(KEY) ?? 'null') ?? undefined; } catch { /* ignore */ }
-    load(stored?.g != null ? stored : fallback);
+    load(stored?.g != null ? stored : fromExample(EXAMPLES[0]));
     const shared = /^#s=(.+)$/.exec(location.hash)?.[1];
     if (shared) {
         history.replaceState(null, '', location.pathname + location.search);
-        try { replaceWith(await unpack(shared), 'Shared grammar and programs loaded.'); }
-        catch { toast('This share link could not be read.'); }
+        try {
+            const s = await unpack(shared);
+            // Whatever the link says, its code is not run before the reader agrees.
+            const hasCode = !!(String(s.v ?? '').trim() || String(s.x ?? '').trim());
+            if (hasCode) s.c = false; else delete s.c;
+            replaceWith(s, hasCode ? 'Shared work loaded. Its code has not been run.' : 'Shared grammar and programs loaded.');
+        } catch { toast('This share link could not be read.'); }
     }
 })();

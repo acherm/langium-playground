@@ -9,11 +9,34 @@ grammar and in the programs.
 It is one static page, with Langium **4.4.0** inside. Nothing to install, no server, no account: the
 page also works offline, opened from disk.
 
+**Highlights**
+
+- **A grammar, several programs, the syntax tree**, side by side. Each program is marked accepted or
+  rejected; every error has its line, its column and the phase that found it.
+- **A validator and a generator in TypeScript**, written as in a Langium project (same imports, same
+  interfaces) and executed in the page: the checks show up in the programs, the generated text or
+  files in "Output".
+- **Editor support in the grammar and in the programs**: completion, go to definition, rename,
+  occurrences, hover, formatting of the grammar.
+- **It does not freeze and does not lie**: Langium runs in a web worker with a time limit, and a
+  result is shown only if it matches the text on screen.
+- **What the validators do not tell**: left recursion and ambiguous alternatives are reported on the
+  rule concerned.
+- **Nothing is lost**: autosave in the browser, a share link that contains everything, downloads.
+- **No server, no LSP protocol, one HTML file**: Langium's services are called directly.
+- Five examples, two of them complete (grammar, validator, generator): Hello world and Chess-Uno.
+- 31 automated tests of the Langium and user-code sides, and a test of the built file. The interface
+  itself is tested by hand only.
+- Written with Claude Code, in one conversation: see [Credits](#credits) and
+  [Open questions](#open-questions).
+
 ## What this is not
 
 Let's be clear: Langium is not only the playground. It is all about the framework to build services
-around a language: validation, scoping, generators, interpreters, editors... Here, this is totally
-missing. This page only covers the very first step: a grammar, programs, a syntax tree.
+around a language: validation, scoping, generators, interpreters, editors... Here, most of this is
+missing. This page covers the first steps: a grammar, programs, a syntax tree, and since recently a
+validator and a generator that can be plugged in (see below). Scoping, type systems, the command
+line, the VS Code extension, the generated and typed AST, a real project with its modules: not here.
 
 ## The idea
 
@@ -38,9 +61,64 @@ or Ctrl/Cmd-click), rename of a name and all its uses (F2), marking of the decla
 name under the cursor, documentation comments on hover. The grammar can be formatted (Shift-Alt-F).
 
 What you get, besides: several programs in tabs, each with an accepted / rejected mark; a hover that
-tells whether the lexer read a word as a keyword or as a terminal; the tree as JSON; highlighting of a tree node's text; autosave in the browser;
-a share link that contains grammar and programs; downloads. Examples: Hello world, Chess,
-VideoGenerator, Poll, Chess-Uno.
+tells whether the lexer read a word as a keyword or as a terminal; the tree as JSON; highlighting of
+a tree node's text; autosave in the browser; a share link that contains everything; downloads.
+Examples: Hello world, Chess, VideoGenerator, Poll, Chess-Uno.
+
+## A validator and a generator, in TypeScript
+
+Next to the grammar, two more files can be written, in the tabs "Validator" and "Generator". They are
+written **as in a Langium project**, with the same imports and the same interfaces, and they are
+executed in the page. The validator and the generator of the Langium project template run unchanged
+(example "Hello world"); so do those of MiniChuno (example "Chess-Uno").
+
+**Validator.** The file exports `registerValidationChecks(services)` and a class, as usual:
+
+```ts
+import type { ValidationAcceptor, ValidationChecks } from 'langium';
+import type { HelloWorldAstType, Person } from './generated/ast.js';
+
+export function registerValidationChecks(services: HelloWorldServices) {
+    const registry = services.validation.ValidationRegistry;
+    const validator = services.validation.HelloWorldValidator;
+    const checks: ValidationChecks<HelloWorldAstType> = {
+        Person: validator.checkPersonStartsWithCapital
+    };
+    registry.register(checks, validator);
+}
+
+export class HelloWorldValidator {
+    checkPersonStartsWithCapital(person: Person, accept: ValidationAcceptor): void { ... }
+}
+```
+
+Every class the file exports is registered under its name in `services.validation`, which is what
+the module of a Langium project does by hand. The errors and warnings of the checks appear in the
+programs, with the others.
+
+**Generator.** The file exports a function that receives the root of the AST of a valid program. What
+it returns, the files it writes with `fs.writeFileSync`, and what it prints with `console.log` are
+shown in the "Output" view, next to the tree. The function is the default export, or the one whose
+name starts with `generate` (also: `compile`, `transform`, `interpret`, `run`, `toSomething`). It is
+called as the command line of the template calls it: `(model, filePath, destination)`. It runs on
+valid programs only. An interpreter is a generator that prints.
+
+**What can be imported:** `langium`, `langium/generate`, `langium/lsp`, `./generated/ast.js` (any path
+that ends so), `node:fs` and `node:path` (stand-ins: files are collected, not written), and
+`./cli-util.js` for `extractDestinationAndName`. An `import type` of anything is fine.
+
+**What differs from a real project, and matters:**
+
+- **Types are erased, not checked.** There is no TypeScript compiler in the page: a type error is not
+  reported, only what fails when the code runs. An error in the code is located (line), on a best
+  effort basis.
+- **`./generated/ast.js` is not generated.** Its type guards (`isPerson`) and constants (`Person`) are
+  answered from the interpreted grammar. Its *types* do not exist here, since types are erased.
+- One file each: the validator and the generator cannot import each other, nor other files.
+- When the validator does not load, programs are not analysed: they could pass wrongly.
+- **Code from a share link is not run** until the reader presses "Run the code", after reading it.
+  The code runs in the web worker: it has no access to the page nor to what the browser saved, and a
+  loop is stopped by the time limit.
 
 ## Motivation: issues with the official playground
 
@@ -138,6 +216,11 @@ request carries the full text, and every answer is checked against the text on s
   proposes keywords and reference targets; definition, occurrences and rename follow the
   cross-references, in a program and in the grammar (a renamed rule leaves a grammar that still
   works); formatting changes the layout only.
+- **Automated tests of the user code side** (`test/usercode.test.ts`, 13 tests, in Node): the
+  validator and the generator of the Langium template, and those of MiniChuno, run unchanged and give
+  the expected warnings, files and text; a syntax error, an error while registering the checks, a
+  check that throws, a generator that throws are each reported at the right place; an import that
+  is not available is said clearly; each program gets its own output.
 - **A test of the built file** (`test/bundle.test.mjs`): `dist/index.html` contains two inline scripts
   that parse and no external resource, and the worker code embedded in it, run in a Node sandbox,
   answers grammar, program and completion requests. This checks that Langium really works once
@@ -168,6 +251,7 @@ feature comes from Langium's default language server and was not checked one by 
 
 | | Official | Here |
 |---|---|---|
+| Validator and generator | none: the grammar only | written in TypeScript as in a Langium project, run in the page |
 | Several programs | one | tabs, each with an accepted / rejected mark |
 | Saving | nothing: a reload resets to HelloWorld | autosave in the browser, file downloads |
 | Examples | HelloWorld | five |
@@ -205,7 +289,8 @@ Node.js 22.6 or later.
 | File | Role |
 |---|---|
 | `src/analysis.ts` | everything that touches Langium: grammar, program, tokens, AST, completion |
-| `src/worker.ts` | the web worker around it |
+| `src/usercode.ts` | runs the validator and the generator: type erasure, importable modules, error location |
+| `src/worker.ts` | the web worker around both |
 | `src/main.ts` | the page: editors, analysis loop, problem lists, tree, saving and sharing |
 | `src/examples.ts` | the examples (most from [acherm/dsl-langium](https://github.com/acherm/dsl-langium)) |
 | `src/index.html`, `src/style.css` | markup and styles |
@@ -239,5 +324,7 @@ source, in the motivation and the comparison, was also done by Claude.
 ## Limits
 
 - One grammar file: `import` of another grammar is not supported.
-- Langium's default behaviour only: no custom validator, scoping or generator.
+- Besides the validator and the generator, Langium's default behaviour only: no custom scoping, no
+  other service can be replaced.
+- The validator and the generator are not type-checked (see above).
 - This is not the official playground, which is at https://langium.org/playground/.

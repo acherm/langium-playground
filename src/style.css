@@ -101,6 +101,14 @@ kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 4px;
 .ast.stale > :not(.banner) { opacity: 0.45; }
 .ast .banner { margin: -8px -10px 8px; font-family: var(--sans); }
 .ast pre { margin: 0; white-space: pre; }
+.ast .note { font-family: var(--sans); color: var(--muted); padding: 4px 2px; }
+.ast .file { border: 1px solid var(--line); border-radius: 6px; margin-bottom: 10px; overflow: hidden; }
+.ast .file-name { font-family: var(--sans); font-size: 12px; font-weight: 650; padding: 4px 10px; background: var(--hover); border-bottom: 1px solid var(--line); }
+.ast .file pre { padding: 8px 10px; overflow-x: auto; }
+.editor[hidden] { display: none; }
+#consent { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+#consent[hidden] { display: none; }
+.problems .starter { margin-left: 6px; padding: 1px 8px; font-size: 12px; }
 .ast details > .kids, .ast .kids { margin-left: 7px; padding-left: 12px; border-left: 1px solid var(--line); }
 .ast summary, .ast .leaf { border-radius: 4px; padding: 0 4px; cursor: default; white-space: nowrap; }
 .ast summary { cursor: pointer; }
