@@ -1,0 +1,28 @@
+{
+  "name": "langium-playground-standalone",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A standalone Langium playground: one static page, Langium in a web worker.",
+  "type": "module",
+  "scripts": {
+    "build": "node build.mjs",
+    "typecheck": "tsc",
+    "test": "node --experimental-strip-types --no-warnings test/analysis.test.ts && node build.mjs && node test/bundle.test.mjs"
+  },
+  "dependencies": {
+    "langium": "4.4.0"
+  },
+  "devDependencies": {
+    "@codemirror/autocomplete": "^6.20.4",
+    "@codemirror/commands": "^6.11.2",
+    "@codemirror/language": "^6.13.1",
+    "@codemirror/lint": "^6.9.8",
+    "@codemirror/search": "^6.7.3",
+    "@codemirror/state": "^6.7.6",
+    "@codemirror/view": "^6.44.0",
+    "@lezer/highlight": "^1.2.5",
+    "codemirror": "^6.0.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2"
+  }
+}

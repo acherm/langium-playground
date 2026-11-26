@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Langium playground (standalone)</title>
+<style>/*CSS*/</style>
+</head>
+<body>
+<header class="bar">
+  <h1>Langium playground <span class="sub">standalone · Langium <span id="version"></span></span></h1>
+  <div class="actions">
+    <label class="pick">Examples
+      <select id="examples" aria-label="Load an example"><option value="">Load…</option></select>
+    </label>
+    <button id="download-grammar" title="Download the grammar as a .langium file">Download grammar</button>
+    <button id="download-program" title="Download the current program">Download program</button>
+    <button id="share" class="primary" title="Copy a link that contains the grammar and the programs">Copy share link</button>
+  </div>
+</header>
+
+<main id="cols">
+  <section class="panel" id="grammar-panel" aria-label="Grammar">
+    <div class="head"><h2>Grammar</h2><span class="chip" id="grammar-chip"></span></div>
+    <div class="editor" id="grammar-editor"></div>
+    <div class="problems" id="grammar-problems"></div>
+  </section>
+  <div class="split" data-split="0" role="separator" aria-orientation="vertical"></div>
+  <section class="panel" id="program-panel" aria-label="Programs">
+    <div class="head"><div class="tabs" id="tabs" role="tablist"></div><button id="add-tab" class="ghost" title="New program">+</button></div>
+    <div class="editor" id="program-editor"></div>
+    <div class="problems" id="program-problems"></div>
+  </section>
+  <div class="split" data-split="1" role="separator" aria-orientation="vertical"></div>
+  <section class="panel" id="ast-panel" aria-label="Syntax tree">
+    <div class="head"><h2>Syntax tree</h2><span class="chip" id="ast-chip"></span>
+      <span class="grow"></span>
+      <div class="seg" role="group" aria-label="View">
+        <button id="view-tree" aria-pressed="true">Tree</button><button id="view-json" aria-pressed="false">JSON</button>
+      </div>
+      <button id="copy-json" class="ghost" title="Copy the AST as JSON">Copy</button>
+    </div>
+    <div class="ast" id="ast"></div>
+  </section>
+</main>
+
+<footer class="bar foot">
+  <span>Runs entirely in your browser. Your work is saved in this browser only: copy it to your repository.</span>
+  <span id="timing"></span>
+</footer>
+<div id="toast" role="status" aria-live="polite" hidden></div>
+
+<script type="text/plain" id="worker-source"><!--WORKER--></script>
+<script><!--APP--></script>
+</body>
+</html>
