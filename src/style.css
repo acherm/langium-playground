@@ -74,6 +74,10 @@ main { flex: 1; min-height: 0; display: grid; grid-template-columns: minmax(0, v
 .cm-editor .cm-panels { background: var(--bg); color: var(--text); border-color: var(--line); }
 .cm-editor .cm-matchingBracket { background: var(--sel); }
 .cm-ast-hl { background: var(--hl); border-radius: 2px; }
+.cm-occurrence { background: color-mix(in srgb, var(--info) 22%, transparent); border-radius: 2px; }
+.foot .keys { margin-left: auto; }
+kbd { font: 11px var(--mono); border: 1px solid var(--line); border-radius: 4px; padding: 0 4px; background: var(--panel); }
+.tok-tip.doc { white-space: pre-wrap; max-width: 420px; }
 .tok-tip { padding: 3px 8px; font: 12px var(--sans); }
 .tok-tip code { font-family: var(--mono); }
 .tok-keyword { color: var(--kw); font-weight: 600; }

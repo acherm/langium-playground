@@ -21,7 +21,10 @@
 
 <main id="cols">
   <section class="panel" id="grammar-panel" aria-label="Grammar">
-    <div class="head"><h2>Grammar</h2><span class="chip" id="grammar-chip"></span></div>
+    <div class="head"><h2>Grammar</h2><span class="chip" id="grammar-chip"></span>
+      <span class="grow"></span>
+      <button id="format" class="ghost" title="Format the grammar (Shift-Alt-F)">Format</button>
+    </div>
     <div class="editor" id="grammar-editor"></div>
     <div class="problems" id="grammar-problems"></div>
   </section>
@@ -45,7 +48,8 @@
 </main>
 
 <footer class="bar foot">
-  <span>Runs entirely in your browser. Your work is saved in this browser only: copy it to your repository.</span>
+  <span>Runs in your browser; your work is saved in this browser only, so copy it to your repository.</span>
+  <span class="keys"><kbd>Ctrl-Space</kbd> complete · <kbd>F12</kbd> or <kbd>Ctrl/Cmd-click</kbd> go to definition · <kbd>F2</kbd> rename</span>
   <span id="timing"></span>
 </footer>
 <div id="toast" role="status" aria-live="polite" hidden></div>

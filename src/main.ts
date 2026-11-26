@@ -8,12 +8,13 @@ import { autocompletion, type CompletionContext, type CompletionResult } from '@
 import { indentWithTab } from '@codemirror/commands';
 import { StreamLanguage, syntaxHighlighting } from '@codemirror/language';
 import { setDiagnostics, type Diagnostic } from '@codemirror/lint';
-import { EditorState, StateEffect, StateField, type Extension, type TransactionSpec } from '@codemirror/state';
+import { EditorState, Prec, StateEffect, StateField, type Extension, type TransactionSpec } from '@codemirror/state';
 import { Decoration, type DecorationSet, hoverTooltip, keymap } from '@codemirror/view';
 import { classHighlighter } from '@lezer/highlight';
 import { EditorView, basicSetup } from 'codemirror';
-import type { Completion, GrammarResult, Problem, ProgramResult, Token } from './analysis';
+import type { Completion, Edit, GrammarResult, Problem, ProgramResult, Span, Token } from './analysis';
 import { EXAMPLES } from './examples';
+import type { Request } from './worker';
 
 declare const __LANGIUM_VERSION__: string;
 
@@ -64,17 +65,17 @@ class Engine {
         this.start();
     }
 
-    /** An analysis that times out costs the worker its life; a completion that times out is just dropped. */
-    call<T>(type: 'grammar' | 'program' | 'complete', text: string, timeout: number, offset?: number): Promise<T> {
+    /** An analysis that times out costs the worker its life; an editor feature that times out is just dropped. */
+    call<T>(type: Request['type'], text: string, timeout: number, extra: Partial<Request> = {}): Promise<T> {
         const id = ++this.seq;
         return new Promise<T>((resolve, reject) => {
             const timer = window.setTimeout(() => {
-                if (type !== 'complete') return this.restart(new TimeoutError());
+                if (type === 'grammar' || type === 'program') return this.restart(new TimeoutError());
                 this.pending.delete(id);
                 reject(new TimeoutError());
             }, timeout);
             this.pending.set(id, { resolve, reject, timer });
-            this.worker.postMessage({ id, type, text, offset });
+            this.worker.postMessage({ ...extra, id, type, text });
         });
     }
 }
@@ -204,18 +205,124 @@ const tokenTooltip = hoverTooltip((_view, pos) => {
     };
 });
 
-async function completions(ctx: CompletionContext): Promise<CompletionResult | null> {
-    if (!grammar.result?.ok || grammar.resultRev !== grammar.rev) return null;
+// ---- editor features: completion, go to definition, occurrences, rename, hover, formatting.
+// The same code serves both editors: `side` says whether Langium's grammar language or the
+// language defined by the grammar answers. Each answer is used only if the text did not change.
+
+type Side = 'grammar' | 'program';
+
+/** The program side can answer only when the worker holds the grammar that is on screen. */
+const ready = (side: Side) => side === 'grammar'
+    || (grammar.result?.ok === true && grammar.resultRev === grammar.rev && builtIn === engine.restarts);
+
+async function ask<T>(type: Request['type'], side: Side, view: EditorView, fallback: T, extra: Partial<Request> = {}): Promise<T> {
+    if (!ready(side)) return fallback;
+    const doc = view.state.doc;
+    try {
+        const result = await engine.call<T>(type, doc.toString(), 3000, { target: side, ...extra });
+        return view.state.doc === doc ? result : fallback;
+    } catch { return fallback; }
+}
+
+const completionsFor = (side: Side) => async (ctx: CompletionContext): Promise<CompletionResult | null> => {
     const word = ctx.matchBefore(/[\w-]+/);
     if (!ctx.explicit && !word) return null;
+    if (!ready(side)) return null;
     let items: Completion[] = [];
-    try { items = await engine.call<Completion[]>('complete', ctx.state.doc.toString(), 3000, ctx.pos); } catch { return null; }
+    try { items = await engine.call<Completion[]>('complete', ctx.state.doc.toString(), 3000, { target: side, offset: ctx.pos }); } catch { return null; }
     if (ctx.aborted || !items.length) return null;
     return {
         from: Math.min(ctx.pos, ...items.map(i => i.from)),
         validFor: /^[\w-]*$/,
         options: items.map(i => ({ label: i.label, detail: i.detail, type: i.kind === 'keyword' ? 'keyword' : i.kind === 'reference' ? 'variable' : 'text', apply: i.insert })),
     };
+};
+
+async function goToDefinition(view: EditorView, side: Side, offset = view.state.selection.main.head) {
+    const span = await ask<Span | null>('definition', side, view, null, { offset });
+    if (!span) { toast(ready(side) ? 'No definition found here.' : 'Not available while the grammar has errors.'); return; }
+    view.dispatch({ selection: { anchor: span.from, head: span.to }, scrollIntoView: true });
+    view.focus();
+}
+
+async function renameSymbol(view: EditorView, side: Side) {
+    const offset = view.state.selection.main.head;
+    const target = await ask<(Span & { name: string }) | null>('renameTarget', side, view, null, { offset });
+    if (!target) { toast(ready(side) ? 'Nothing to rename here: put the cursor on a name.' : 'Not available while the grammar has errors.'); return; }
+    const name = prompt(`Rename "${target.name}" to:`, target.name)?.trim();
+    if (!name || name === target.name) return;
+    const edits = await ask<Edit[]>('rename', side, view, [], { offset, name });
+    if (!edits.length) { toast('The rename could not be done.'); return; }
+    view.dispatch({ changes: edits.map(e => ({ from: e.from, to: e.to, insert: e.insert })), userEvent: 'input.rename' });
+    toast(`"${target.name}" renamed to "${name}" in ${edits.length} place${edits.length > 1 ? 's' : ''}.`);
+    view.focus();
+}
+
+async function formatText(view: EditorView, side: Side) {
+    const before = view.state.doc.toString();
+    const edits = await ask<Edit[]>('format', side, view, []);
+    if (edits.length) view.dispatch({ changes: edits.map(e => ({ from: e.from, to: e.to, insert: e.insert })), userEvent: 'input.format' });
+    toast(view.state.doc.toString() !== before ? 'Formatted.' : 'Nothing to format (a text with syntax errors is left as it is).');
+}
+
+const setOccurrences = StateEffect.define<Span[]>();
+const occurrenceField = StateField.define<DecorationSet>({
+    create: () => Decoration.none,
+    update(value, tr) {
+        if (tr.docChanged) value = Decoration.none;
+        for (const e of tr.effects) {
+            if (e.is(setOccurrences)) {
+                const max = tr.state.doc.length;
+                value = Decoration.set(e.value.filter(s => s.to > s.from && s.to <= max)
+                    .map(s => Decoration.mark({ class: 'cm-occurrence' }).range(s.from, s.to)), true);
+            }
+        }
+        return value;
+    },
+    provide: f => EditorView.decorations.from(f),
+});
+
+function features(side: Side): Extension {
+    let timer = 0;
+    const keys = [
+        { key: 'F12', run: (view: EditorView) => { void goToDefinition(view, side); return true; } },
+        { key: 'F2', run: (view: EditorView) => { void renameSymbol(view, side); return true; } },
+    ];
+    if (side === 'grammar') keys.push({ key: 'Shift-Alt-f', run: (view: EditorView) => { void formatText(view, side); return true; } });
+    return [
+        occurrenceField,
+        autocompletion({ override: [completionsFor(side)] }),
+        Prec.high(keymap.of(keys)),
+        // Ctrl-click (Cmd-click on a Mac): go to the definition.
+        Prec.highest(EditorView.domEventHandlers({
+            mousedown(event, view) {
+                if (event.button !== 0 || !(event.metaKey || event.ctrlKey)) return false;
+                const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
+                if (offset == null) return false;
+                event.preventDefault();
+                void goToDefinition(view, side, offset);
+                return true;
+            },
+        })),
+        // The name under the cursor: its declaration and its uses are marked.
+        EditorView.updateListener.of(u => {
+            if (!u.selectionSet && !u.docChanged) return;
+            clearTimeout(timer);
+            const view = u.view;
+            timer = window.setTimeout(async () => {
+                const sel = view.state.selection.main;
+                const spans = sel.empty && view.hasFocus ? await ask<Span[]>('occurrences', side, view, [], { offset: sel.head }) : [];
+                if (view.state.selection.main.head !== sel.head) return;
+                view.dispatch({ effects: setOccurrences.of(spans.length > 1 ? spans : []) });
+            }, 250);
+        }),
+        // Documentation comment of what is under the mouse.
+        hoverTooltip(async (view, pos) => {
+            const text = await ask<string>('hover', side, view, '', { offset: pos });
+            if (!text) return null;
+            return { pos, above: true, create: () => ({ dom: el('div', 'tok-tip doc', text.replace(/^```\w*\n?|```$/gm, '').trim()) }) };
+        }),
+    ];
 }
 
 const common: Extension = [basicSetup, keymap.of([indentWithTab]), EditorView.lineWrapping, syntaxHighlighting(classHighlighter)];
@@ -223,7 +330,7 @@ const common: Extension = [basicSetup, keymap.of([indentWithTab]), EditorView.li
 const grammarView = new EditorView({
     parent: $('grammar-editor'),
     state: EditorState.create({
-        extensions: [common, grammarLanguage, EditorView.updateListener.of(u => {
+        extensions: [common, grammarLanguage, features('grammar'), EditorView.updateListener.of(u => {
             if (!u.docChanged) return;
             grammar.rev++; grammar.dirty = true;
             schedule(300);
@@ -231,7 +338,7 @@ const grammarView = new EditorView({
     }),
 });
 
-const programExtensions: Extension = [common, tokenField, highlightField, tokenTooltip, autocompletion({ override: [completions] }),
+const programExtensions: Extension = [common, tokenField, highlightField, tokenTooltip, features('program'),
     EditorView.updateListener.of(u => {
         const t = tab();
         if (!t) return;
@@ -649,6 +756,7 @@ $('share').onclick = async () => {
     try { await navigator.clipboard.writeText(url); toast('Link copied. It contains the grammar and the programs.'); }
     catch { prompt('Copy this link', url); }
 };
+$('format').onclick = () => formatText(grammarView, 'grammar');
 $('copy-json').onclick = async () => {
     const t = tab();
     if (!t.result) return;

@@ -19,9 +19,9 @@ const self = { postMessage: m => answers.get(m.id)?.(m), onmessage: null };
 const context = vm.createContext({ self, console, performance, setTimeout, clearTimeout, URL, TextEncoder, TextDecoder, queueMicrotask });
 new vm.Script(scripts[0][2]).runInContext(context);
 let id = 0;
-const call = (type, text, offset) => new Promise(resolve => {
+const call = (type, text, offset, extra = {}) => new Promise(resolve => {
     answers.set(++id, resolve);
-    self.onmessage({ data: { id, type, text, offset } });
+    self.onmessage({ data: { id, type, text, offset, ...extra } });
 });
 
 const grammar = `grammar HelloWorld
@@ -40,9 +40,20 @@ assert.match(p.result.problems[0].message, /named 'Bob'/);
 assert.deepEqual([p.result.problems[0].line, p.result.problems[0].col], [3, 7]);
 const c = await call('complete', 'person Alice\nHello ', 19);
 assert.equal(c.result.map(x => x.label).join(), 'Alice');     // (arrays come from another realm)
+// Editor features, on the program and on the grammar.
+const program = 'person Alice\nHello Alice !\n';
+const def = await call('definition', program, 20, { target: 'program' });
+assert.equal(`${def.result.from}-${def.result.to}`, '7-12');
+const renamed = await call('rename', program, 20, { target: 'program', name: 'Bob' });
+assert.equal(renamed.result.map(e => `${e.from}:${e.insert}`).sort().join(), '19:Bob,7:Bob');
+const rule = await call('definition', grammar, grammar.indexOf('+=Person') + 3, { target: 'grammar' });
+assert.equal(rule.result.from, grammar.indexOf('Person:'));
+const formatted = await call('format', grammar.replace('entry Model: ', 'entry    Model:'), 0, { target: 'grammar' });
+assert.ok(formatted.result.length > 0);
+
 const bad = await call('grammar', grammar.replace('name=ID', 'name=IDD'));
 assert.equal(bad.result.ok, false);
 const refused = await call('program', 'person Alice\n');
 assert.equal(refused.ok, false);
-console.log('  ok 2 embedded worker: grammar, program, completion, and refusal after a broken grammar');
+console.log('  ok 2 embedded worker: grammar, program, completion, definition, rename, format, and refusal after a broken grammar');
 console.log('bundle test passed');

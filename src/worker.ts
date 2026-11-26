@@ -1,22 +1,41 @@
 // Web worker: Langium runs here, so that a slow or looping analysis never freezes the page
 // (the page ends this worker and starts a new one when an answer takes too long).
-import { analyzeGrammar, analyzeProgram, complete } from './analysis';
+import * as langium from './analysis';
 
-interface Request { id: number; type: 'grammar' | 'program' | 'complete'; text: string; offset?: number }
+export interface Request {
+    id: number;
+    type: 'grammar' | 'program' | 'complete' | 'definition' | 'occurrences' | 'hover' | 'renameTarget' | 'rename' | 'format';
+    target?: langium.Target;   // for the editor features: which editor asks
+    text: string;
+    offset?: number;
+    name?: string;             // for rename: the new name
+}
+
+function answer({ type, target = 'program', text, offset = 0, name = '' }: Request): Promise<unknown> {
+    switch (type) {
+        case 'grammar': return langium.analyzeGrammar(text);
+        case 'program': return langium.analyzeProgram(text);
+        case 'complete': return langium.complete(target, text, offset);
+        case 'definition': return langium.definition(target, text, offset);
+        case 'occurrences': return langium.occurrences(target, text, offset);
+        case 'hover': return langium.hover(target, text, offset);
+        case 'renameTarget': return langium.renameTarget(target, text, offset);
+        case 'rename': return langium.rename(target, text, offset, name);
+        case 'format': return langium.format(target, text);
+    }
+}
 
 let queue: Promise<void> = Promise.resolve();
 
 self.onmessage = (event: MessageEvent<Request>) => {
-    const { id, type, text, offset } = event.data;
+    const request = event.data;
     queue = queue.then(async () => {
         const started = performance.now();
         try {
-            const result = type === 'grammar' ? await analyzeGrammar(text)
-                : type === 'program' ? await analyzeProgram(text)
-                : await complete(text, offset ?? 0);
-            self.postMessage({ id, ok: true, result, ms: performance.now() - started });
+            const result = await answer(request);
+            self.postMessage({ id: request.id, ok: true, result, ms: performance.now() - started });
         } catch (error) {
-            self.postMessage({ id, ok: false, error: error instanceof Error ? error.message : String(error) });
+            self.postMessage({ id: request.id, ok: false, error: error instanceof Error ? error.message : String(error) });
         }
     });
 };
