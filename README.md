@@ -205,6 +205,14 @@ Node.js 22.6 or later.
 | `src/index.html`, `src/style.css` | markup and styles |
 | `build.mjs` | bundles everything into `dist/index.html` |
 
+## Credits
+
+Designed and directed by Mathieu Acher (INSA Rennes) for the course "Domain-Specific Languages".
+The code, the tests and this README were written with [Claude Code](https://claude.com/claude-code)
+(Claude Fable 5.2, Anthropic), over one conversation: the need, the review of the result and the
+decisions are human, the implementation is the model's. The reading of the official playground's
+source, in the motivation and the comparison, was also done by Claude.
+
 ## Limits
 
 - One grammar file: `import` of another grammar is not supported.
