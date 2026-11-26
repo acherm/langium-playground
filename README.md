@@ -9,6 +9,12 @@ grammar and in the programs.
 It is one static page, with Langium **4.4.0** inside. Nothing to install, no server, no account: the
 page also works offline, opened from disk.
 
+## What this is not
+
+Let's be clear: Langium is not only the playground. It is all about the framework to build services
+around a language: validation, scoping, generators, interpreters, editors... Here, this is totally
+missing. This page only covers the very first step: a grammar, programs, a syntax tree.
+
 ## The idea
 
 A grammar is enough to get a working language: Langium can *interpret* a grammar and give, at once,
@@ -204,6 +210,23 @@ Node.js 22.6 or later.
 | `src/examples.ts` | the examples (most from [acherm/dsl-langium](https://github.com/acherm/dsl-langium)) |
 | `src/index.html`, `src/style.css` | markup and styles |
 | `build.mjs` | bundles everything into `dist/index.html` |
+
+## Open questions
+
+This page raises many socio-technical questions. I have no answers.
+
+- **What about the official Langium project?** This page does not retrofit its changes into the
+  official playground. It is not even a real fork. I find it a bit sad, and fuzzy for the future of
+  open-source projects: when rewriting costs an afternoon, who contributes upstream? Would issues be
+  welcome? Agent-written pull requests?
+- **On the other hand, if Langium evolves**, we will need agents to integrate the changes here. Who
+  maintains such a page, and for how long? Are the tests enough for that?
+- **What about LSP?** Here it has disappeared, and it "sounds" fine. Is it? The protocol is gone, but
+  the services of Langium that were designed for it are what made this page short to write. What is
+  LSP when the editor and the language live in the same process?
+- **What is the future of language workbenches?** If the glue (editors, pages, even parsers) becomes
+  cheap to write, what remains: the grammar, as a short specification that can be checked? The
+  framework, as something agents can rely on?
 
 ## Credits
 
