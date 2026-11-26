@@ -1,6 +1,6 @@
 # Langium playground, standalone
 
-**Try it: https://acherm.github.io/langium-playground/**
+**Try it: https://blog.mathieuacher.com/langium-playground/**
 
 Write a [Langium](https://langium.org/) grammar on the left, programs of your language in the middle,
 and see on the right the syntax tree (AST) that Langium builds. Errors are shown where they are, in the
