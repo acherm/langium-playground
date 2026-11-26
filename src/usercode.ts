@@ -1,7 +1,8 @@
 // Runs the TypeScript that the user writes next to the grammar: a validator and a generator.
 //
 // The code is written as in a Langium project (same imports, same interfaces). Three differences:
-//   - types are erased, not checked (Sucrase removes them; there is no TypeScript compiler here);
+//   - types are erased here (Sucrase removes them), and the code runs even with type errors:
+//     type checking is done apart, by the TypeScript service of src/tsservice.ts, to inform;
 //   - the modules it may import are provided below, not read from disk;
 //   - `./generated/ast.js` is not generated: its `isX` functions and `X` constants are answered
 //     from the grammar that is being interpreted.

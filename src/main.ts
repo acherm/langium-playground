@@ -15,6 +15,9 @@ import { classHighlighter } from '@lezer/highlight';
 import { EditorView, basicSetup } from 'codemirror';
 import type { Completion, Edit, GrammarResult, Problem, ProgramResult, Span, Token } from './analysis';
 import { EXAMPLES } from './examples';
+import { generatorStarter, newLanguage, validatorStarter } from './starter';
+import type { Sources, TsCompletions, TsLocation, TsProblem, TsRename } from './tsservice';
+import type { TsRequest } from './tsworker';
 import type { Request } from './worker';
 
 declare const __LANGIUM_VERSION__: string;
@@ -38,21 +41,38 @@ class Engine {
     private worker!: Worker;
     private seq = 0;
     private pending = new Map<number, { resolve: (v: any) => void; reject: (e: Error) => void; timer: number }>();
-    private readonly url = URL.createObjectURL(new Blob([$('worker-source').textContent ?? ''], { type: 'text/javascript' }));
+    private readonly url: string;
     lastMs = 0;
 
-    constructor() { this.start(); }
+    /** `sourceId`: the element that holds the worker's code. `boot`: a first message for each new worker. */
+    constructor(sourceId: string, private readonly boot?: () => object) {
+        this.url = URL.createObjectURL(new Blob([$(sourceId).textContent ?? ''], { type: 'text/javascript' }));
+        this.start();
+    }
 
     private start() {
         this.worker = new Worker(this.url);
+        if (this.boot) this.worker.postMessage({ id: 0, type: 'init', ...this.boot() });
         this.worker.onmessage = e => {
             const p = this.pending.get(e.data.id);
             if (!p) return;
             this.pending.delete(e.data.id);
             clearTimeout(p.timer);
+            this.crashes = 0;
             if (e.data.ok) { this.lastMs = e.data.ms; p.resolve(e.data.result); } else p.reject(new Error(e.data.error));
         };
-        this.worker.onerror = e => this.restart(new Error(e.message || 'The analyser crashed.'));
+        this.worker.onerror = e => {
+            // A worker that keeps crashing without ever answering is not started again.
+            if (++this.crashes > 3) { this.dead = true; this.worker.terminate(); this.failAll(new Error(e.message || 'The worker cannot start.')); return; }
+            this.restart(new Error(e.message || 'The analyser crashed.'));
+        };
+    }
+
+    private crashes = 0;
+    private dead = false;
+    private failAll(reason: Error) {
+        for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(reason); }
+        this.pending.clear();
     }
 
     /** Number of times the worker was replaced: a new worker has no grammar yet. */
@@ -61,14 +81,14 @@ class Engine {
     private restart(reason: Error) {
         this.restarts++;
         this.worker.terminate();
-        for (const p of this.pending.values()) { clearTimeout(p.timer); p.reject(reason); }
-        this.pending.clear();
+        this.failAll(reason);
         this.start();
     }
 
     /** An analysis that times out costs the worker its life; an editor feature that times out is just dropped. */
-    call<T>(type: Request['type'], text: string, timeout: number, extra: Partial<Request> = {}): Promise<T> {
+    call<T>(type: Request['type'] | TsRequest['type'], text: string, timeout: number, extra: object = {}): Promise<T> {
         const id = ++this.seq;
+        if (this.dead) return Promise.reject(new Error('The worker could not be started.'));
         return new Promise<T>((resolve, reject) => {
             const timer = window.setTimeout(() => {
                 if (type === 'grammar' || type === 'program') return this.restart(new TimeoutError());
@@ -81,7 +101,7 @@ class Engine {
     }
 }
 
-const engine = new Engine();
+const engine = new Engine('worker-source');
 
 // ---------------------------------------------------------------- state
 
@@ -341,23 +361,127 @@ const grammarView = new EditorView({
 
 // The validator and the generator: TypeScript, written as in a Langium project. A change there is
 // handled like a change of the grammar: the language is rebuilt and every program analysed again.
-const codeView = (host: string) => new EditorView({
+type CodeSide = 'validator' | 'generator';
+type Left = 'grammar' | CodeSide | 'ast';
+
+// ---- TypeScript assistance in these two files: completion, types on hover, type errors, go to
+// definition, rename. A TypeScript language service runs in a worker of its own, started the first
+// time it is needed. It only informs: the code is run whatever it says.
+
+let tsEngine: Engine | undefined;
+const tsService = () => tsEngine ??= new Engine('ts-worker-source', () => ({ libs: JSON.parse($('ts-libs').textContent || '{}') }));
+/** The AST types of the last valid grammar (kept while the grammar is being edited). */
+const astTypes = { text: '', name: '' };
+const tsProblems: Record<CodeSide, Problem[]> = { validator: [], generator: [] };
+const tsSources = (): Sources => ({ validator: codeOf('validator'), generator: codeOf('generator'), ast: astTypes.text, name: astTypes.name });
+
+async function askTs<T>(type: TsRequest['type'], side: CodeSide, fallback: T, offset = 0): Promise<T> {
+    const view = leftViews[side], doc = view.state.doc;
+    try {
+        const result = await tsService().call<T>(type, '', 10_000, { sources: tsSources(), file: side, offset });
+        return view.state.doc === doc ? result : fallback;
+    } catch { return fallback; }
+}
+
+let tsTimer = 0;
+function scheduleTs() {
+    clearTimeout(tsTimer);
+    tsTimer = window.setTimeout(refreshTs, 400);
+}
+/** Type-checks the two files. The first call also starts the service, which takes a moment. */
+async function refreshTs() {
+    if (!codeOf('validator').trim() && !codeOf('generator').trim()) {
+        tsProblems.validator = []; tsProblems.generator = [];
+        renderGrammar();
+        return;
+    }
+    const docs = [leftViews.validator.state.doc, leftViews.generator.state.doc];
+    try {
+        const found = await tsService().call<Record<CodeSide, TsProblem[]>>('diagnostics', '', 30_000, { sources: tsSources() });
+        if (docs[0] !== leftViews.validator.state.doc || docs[1] !== leftViews.generator.state.doc) return;    // edited meanwhile
+        for (const side of ['validator', 'generator'] as const) tsProblems[side] = found[side].map(p => ({ ...p, source: 'typescript' }));
+    } catch { return; }      // the page works without the type checker
+    renderGrammar();
+}
+
+async function tsDefinition(side: CodeSide, offset: number) {
+    const target = await askTs<TsLocation | null>('definition', side, null, offset);
+    if (!target) { toast('No definition to show here (what Langium declares is not shown in the page).'); return; }
+    if (target.file !== left) selectLeft(target.file);
+    const view = leftViews[target.file], max = view.state.doc.length;
+    view.dispatch({ selection: { anchor: Math.min(target.from, max), head: Math.min(target.to, max) }, scrollIntoView: true });
+    view.focus();
+}
+
+async function tsRename(side: CodeSide) {
+    const view = leftViews[side];
+    const found = await askTs<TsRename | null>('rename', side, null, view.state.selection.main.head);
+    if (!found) { toast('Nothing to rename here: put the cursor on a name declared in this file.'); return; }
+    const name = prompt(`Rename "${found.name}" to:`, found.name)?.trim();
+    if (!name || name === found.name) return;
+    view.dispatch({ changes: found.spans.map(s => ({ from: s.from, to: s.to, insert: name })), userEvent: 'input.rename' });
+    toast(`"${found.name}" renamed to "${name}" in ${found.spans.length} place${found.spans.length > 1 ? 's' : ''}.`);
+    view.focus();
+}
+
+function tsFeatures(side: CodeSide): Extension {
+    return [
+        autocompletion({
+            override: [async (ctx: CompletionContext): Promise<CompletionResult | null> => {
+                // After a name, a dot, or inside a string (the properties `accept` can point to).
+                if (!ctx.explicit && !ctx.matchBefore(/[\w$]+|\.|['"]/)) return null;
+                const found = await askTs<TsCompletions | null>('complete', side, null, ctx.pos);
+                if (ctx.aborted || !found?.items.length) return null;
+                return { from: Math.min(found.from, ctx.pos), validFor: /^[\w$]*$/, options: found.items.map(i => ({ label: i.label, type: i.kind, detail: i.detail })) };
+            }],
+        }),
+        Prec.high(keymap.of([
+            { key: 'F12', run: view => { void tsDefinition(side, view.state.selection.main.head); return true; } },
+            { key: 'F2', run: () => { void tsRename(side); return true; } },
+        ])),
+        Prec.highest(EditorView.domEventHandlers({
+            mousedown(event, view) {
+                if (event.button !== 0 || !(event.metaKey || event.ctrlKey)) return false;
+                const offset = view.posAtCoords({ x: event.clientX, y: event.clientY });
+                if (offset == null) return false;
+                event.preventDefault();
+                void tsDefinition(side, offset);
+                return true;
+            },
+        })),
+        hoverTooltip(async (_view, pos) => {
+            const text = await askTs<string>('hover', side, '', pos);
+            if (!text) return null;
+            return { pos, above: true, create: () => ({ dom: el('div', 'tok-tip doc code', text) }) };
+        }),
+    ];
+}
+
+const codeView = (host: string, side: CodeSide) => new EditorView({
     parent: $(host),
     state: EditorState.create({
-        extensions: [common, javascript({ typescript: true }), EditorView.updateListener.of(u => {
+        extensions: [common, javascript({ typescript: true }), tsFeatures(side), EditorView.updateListener.of(u => {
             if (!u.docChanged) return;
             grammar.rev++; grammar.dirty = true;
+            tsProblems[side] = [];
             schedule(500);
+            scheduleTs();
         })],
     }),
 });
-type Left = 'grammar' | 'validator' | 'generator';
-const leftViews: Record<Left, EditorView> = { grammar: grammarView, validator: codeView('validator-editor'), generator: codeView('generator-editor') };
-const LEFT: Left[] = ['grammar', 'validator', 'generator'];
+/** Read-only: the TypeScript types of the AST, as `langium generate` would write them. */
+const astTypesView = new EditorView({
+    parent: $('ast-editor'),
+    state: EditorState.create({ extensions: [common, javascript({ typescript: true }), EditorState.readOnly.of(true)] }),
+});
+const leftViews: Record<Left, EditorView> = {
+    grammar: grammarView, validator: codeView('validator-editor', 'validator'), generator: codeView('generator-editor', 'generator'), ast: astTypesView,
+};
+const LEFT: Left[] = ['grammar', 'validator', 'generator', 'ast'];
 let left: Left = 'grammar';
 /** False for code that came with a share link, until the user agrees to run it. */
 let codeAllowed = true;
-const codeOf = (side: 'validator' | 'generator') => leftViews[side].state.doc.toString();
+const codeOf = (side: CodeSide) => leftViews[side].state.doc.toString();
 
 const programExtensions: Extension = [common, tokenField, highlightField, tokenTooltip, features('program'),
     EditorView.updateListener.of(u => {
@@ -415,8 +539,22 @@ async function pump() {
                         ? `The grammar (with its validator and generator) could not be loaded in ${GRAMMAR_TIMEOUT / 1000} s. The analyser was restarted; edit the grammar or the code to try again.`
                         : `The analyser failed on this grammar: ${(e as Error).message}`;
                 }
+                // An example or a new language without validator or generator: give it files to fill.
+                // (This edits the code tabs, so this result becomes stale and the loop goes round again.)
+                if (wantStarters && result?.ok && rev === grammar.rev) {
+                    wantStarters = false;
+                    for (const side of ['validator', 'generator'] as const) {
+                        if (!codeOf(side).trim()) leftViews[side].dispatch({ changes: { from: 0, insert: starter(side, result) } });
+                    }
+                }
                 if (rev !== grammar.rev) continue;          // edited meanwhile: this result is stale
                 grammar.result = result; grammar.resultRev = rev; grammar.failure = failure;
+                if (result?.astSource && (result.astSource !== astTypes.text || result.name !== astTypes.name)) {
+                    // New AST types: show them, and check the validator and the generator against them.
+                    astTypes.text = result.astSource; astTypes.name = result.name;
+                    astTypesView.dispatch({ changes: { from: 0, to: astTypesView.state.doc.length, insert: result.astSource } });
+                    scheduleTs();
+                }
                 for (const t of tabs) t.dirty = true;
                 renderGrammar(); renderProgram(); renderTabs();
                 continue;
@@ -498,52 +636,24 @@ function generatorProblems(): Problem[] {
 const worst = (problems: Problem[]): '' | 'ok' | 'warning' | 'error' =>
     problems.some(p => p.severity === 'error') ? 'error' : problems.some(p => p.severity === 'warning') ? 'warning' : 'ok';
 
-/** A file to start from, with the names of the grammar on screen. */
-function starter(side: 'validator' | 'generator'): string {
-    const name = grammar.result?.name || 'My', entry = grammar.result?.entry || 'Model';
-    return side === 'validator' ? `import type { ValidationAcceptor, ValidationChecks } from 'langium';
-import type { ${name}AstType, ${entry} } from './generated/ast.js';
-
-/**
- * Register custom validation checks: for each type of node, the method that checks it.
- */
-export function registerValidationChecks(services: any) {
-    const registry = services.validation.ValidationRegistry;
-    const validator = services.validation.${name}Validator;
-    const checks: ValidationChecks<${name}AstType> = {
-        ${entry}: validator.check${entry}
-    };
-    registry.register(checks, validator);
-}
-
-/**
- * What the grammar cannot say.
- */
-export class ${name}Validator {
-
-    check${entry}(node: ${entry}, accept: ValidationAcceptor): void {
-        // accept('warning', 'Something to say about this node.', { node });
-    }
-}
-` : `import type { ${entry} } from './generated/ast.js';
-import { expandToString } from 'langium/generate';
-
-/**
- * Receives the root of the AST of a valid program. What it returns is shown in "Output".
- */
-export function generate(model: ${entry}): string {
-    return expandToString\`
-        A \${model.$type}.
-    \`;
-}
-`;
+/** A file to start from, with the names, node types and properties of the grammar on screen. */
+function starter(side: CodeSide, r: GrammarResult | undefined = grammar.result): string {
+    const info = { name: r?.name ?? '', entry: r?.entry ?? '', types: r?.types ?? [] };
+    return side === 'validator' ? validatorStarter(info) : generatorStarter(info);
 }
 
 function renderGrammar() {
     for (const side of LEFT) {
+        if (side === 'ast') {
+            if (left === 'ast') $('grammar-problems').replaceChildren(el('div', 'none',
+                'Read-only. The TypeScript types of the AST, derived from the grammar: what `langium generate` writes in src/language/generated/ast.ts. The validator and the generator import them from \'./generated/ast.js\'.'));
+            continue;
+        }
         const dot = document.querySelector<HTMLElement>(`[data-left="${side}"] .dot`)!;
         if (grammar.resultRev !== grammar.rev) continue;
-        const problems = side === 'grammar' ? grammarProblems() : side === 'validator' ? grammar.result?.validator ?? [] : generatorProblems();
+        const problems = (side === 'grammar' ? grammarProblems()
+            : side === 'validator' ? [...(grammar.result?.validator ?? []), ...tsProblems.validator]
+            : [...generatorProblems(), ...tsProblems.generator]).sort((a, b) => a.from - b.from);
         const view = leftViews[side];
         view.dispatch(setDiagnostics(view.state, toDiagnostics(problems, view.state.doc.length)));
         const empty = side !== 'grammar' && !view.state.doc.toString().trim();
@@ -581,7 +691,8 @@ function selectLeft(side: Left) {
         document.querySelector(`[data-left="${s}"]`)!.setAttribute('aria-selected', String(s === side));
     }
     $('format').hidden = side !== 'grammar';
-    $('download-grammar').textContent = `Download ${side}`;
+    $('download-grammar').textContent = side === 'ast' ? 'Download ast.ts' : `Download ${side}`;
+    if (side === 'validator' || side === 'generator') tsService();      // start the type checker before it is asked something
     leftViews[side].requestMeasure();
     $('grammar-problems').replaceChildren();
     renderGrammar();
@@ -820,7 +931,11 @@ function save() {
     try { localStorage.setItem(KEY, JSON.stringify(snapshot())); } catch { /* private mode: nothing to do */ }
 }
 
-function load(s: Saved) {
+/** True after loading an example or a new language: its empty code tabs get a starting file. */
+let wantStarters = false;
+
+function load(s: Saved, starters = false) {
+    wantStarters = starters && s.c !== false;
     tabs = (s.p?.length ? s.p : [{ n: 'program-1', t: '' }]).map(p => newTab(String(p.n), String(p.t)));
     active = Math.min(Math.max(0, s.a | 0), tabs.length - 1);
     grammar.result = undefined;
@@ -840,10 +955,10 @@ function load(s: Saved) {
 }
 
 /** Replaces the work on screen, and offers to bring it back. */
-function replaceWith(s: Saved, what: string) {
+function replaceWith(s: Saved, what: string, starters = false) {
     const before = snapshot();
     const hadWork = before.g.trim() !== '' && JSON.stringify(before) !== JSON.stringify(s);
-    load(s);
+    load(s, starters);
     toast(what, hadWork ? { label: 'Undo', run: () => load(before) } : undefined);
 }
 
@@ -890,7 +1005,15 @@ $<HTMLSelectElement>('examples').onchange = e => {
     const select = e.target as HTMLSelectElement;
     const ex = EXAMPLES[Number(select.value)];
     select.value = '';
-    if (ex) replaceWith(fromExample(ex), `Example "${ex.name}" loaded.`);
+    if (ex) replaceWith(fromExample(ex), `Example "${ex.name}" loaded.`, true);
+};
+// A new language: a small grammar that works, a program, and a validator and a generator to fill.
+$('new').onclick = () => {
+    const asked = prompt('Name of the new language (one word, for instance Robots):', 'MyDsl');
+    if (asked == null) return;
+    const lang = newLanguage(asked);
+    replaceWith({ g: lang.grammar, v: '', x: '', p: [{ n: lang.program.name, t: lang.program.text }], a: 0 }, `New language "${lang.name}". Your previous work can be brought back.`, true);
+    selectLeft('grammar');
 };
 for (const side of LEFT) {
     const b = document.querySelector<HTMLElement>(`[data-left="${side}"]`)!;
@@ -911,8 +1034,7 @@ $('add-tab').onclick = () => {
     select(tabs.length - 1);
     schedule(0);
 };
-$('download-grammar').onclick = () => download(left === 'grammar' ? `${grammar.result?.name || 'grammar'}.langium` : `${left}.ts`, leftViews[left].state.doc.toString());
-$('download-program').onclick = () => download(/\.\w+$/.test(tab().name) ? tab().name : `${tab().name}.txt`, textOf(tab()));
+$('download-grammar').onclick = () => download(left === 'grammar' ? `${grammar.result?.name || 'grammar'}.langium` : `${left}.ts`, leftViews[left].state.doc.toString());$('download-program').onclick = () => download(/\.\w+$/.test(tab().name) ? tab().name : `${tab().name}.txt`, textOf(tab()));
 $('share').onclick = async () => {
     const url = `${location.href.split('#')[0]}#s=${await pack(snapshot())}`;
     try { await navigator.clipboard.writeText(url); toast('Link copied. It contains the grammar, the validator, the generator and the programs.'); }

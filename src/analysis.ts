@@ -4,7 +4,7 @@
 // The grammar is interpreted by `createServicesForGrammar`: no generated code, and no validation
 // other than what Langium does by default (lexing, parsing, linking).
 import { EmptyFileSystem, GrammarAST, URI, type LangiumDocument } from 'langium';
-import { createLangiumGrammarServices, createServicesForGrammar } from 'langium/grammar';
+import { collectAst, createLangiumGrammarServices, createServicesForGrammar, isAstType } from 'langium/grammar';
 import { exportedClasses, generatorFunction, load, locate as locateInCode, newOutput, runGenerator, type Environment, type Output } from './usercode.ts';
 
 export type { Output } from './usercode.ts';
@@ -28,7 +28,12 @@ export interface GrammarResult {
     /** Problems in the user's validator and generator code (positions are in that code). */
     validator: Problem[];
     generator: Problem[];
+    /** The TypeScript declarations of the AST: what `langium generate` writes in generated/ast.ts. */
+    astSource: string;
+    /** The node types of the AST and their properties, in the order of the grammar's rules. */
+    types: AstTypeInfo[];
 }
+export interface AstTypeInfo { name: string; properties: { name: string; array: boolean; optional: boolean }[] }
 /** The TypeScript written next to the grammar. An empty text means: none. */
 export interface UserCode { validator?: string; generator?: string }
 /** [offset, length, class, token type name] */
@@ -135,6 +140,44 @@ function positioned(text: string, range: { from: number; to: number }, severity:
     return { ...range, line, col: range.from - before.lastIndexOf('\n'), severity, source, message };
 }
 
+/**
+ * The types of the AST, as TypeScript. The declarations come from Langium's own type collector, the
+ * one `langium generate` uses: interfaces, `isX` guards and `X` constants are identical to those of
+ * a generated ast.ts. Only the end differs: there is no reflection class, since the grammar is
+ * interpreted.
+ */
+function describeAst(grammar: GrammarAST.Grammar): { astSource: string; types: AstTypeInfo[] } {
+    const ast = collectAst(grammar, { services: grammarServices } as never);
+    const declared = [
+        ...ast.interfaces.map(i => ({ name: i.name, code: i.toAstTypesString(true) })),
+        ...ast.unions.map(u => ({ name: u.name, code: u.toAstTypesString(isAstType(u.type)) })),
+    ].sort((a, b) => a.name.localeCompare(b.name));
+    const nodeTypes = [...ast.interfaces.map(i => i.name), ...ast.unions.filter(u => isAstType(u.type)).map(u => u.name)].sort();
+    const name = grammar.name ?? 'My';
+    const astSource = `/******************************************************************************
+ * The types of the AST, derived from the grammar. In a Langium project this file is
+ * src/language/generated/ast.ts, written by \`langium generate\`. Read-only here.
+ ******************************************************************************/
+
+import * as langium from 'langium';
+
+${declared.map(d => d.code.trim()).join('\n\n')}
+
+export type ${name}AstType = {
+${nodeTypes.map(t => `    ${t}: ${t}`).join('\n')}
+}
+
+// \`langium generate\` writes a class ${name}AstReflection here. In the playground the grammar is
+// interpreted: the reflection is the one Langium computes from it.
+export declare const reflection: langium.AstReflection;
+`;
+    const order = new Map(grammar.rules.map((r, i) => [r.name, i]));
+    const types = ast.interfaces
+        .map(i => ({ name: i.name, properties: i.properties.map(p => ({ name: p.name, array: 'elementType' in p.type, optional: p.optional })) }))
+        .sort((a, b) => (order.get(a.name) ?? 1e9) - (order.get(b.name) ?? 1e9));
+    return { astSource, types };
+}
+
 /** A problem in user code, from the line and column where it was found. */
 function inCode(code: string, error: unknown, file: string, source: string, severity: Severity = 'error'): Problem {
     const at = locateInCode(error, file, code);
@@ -151,8 +194,9 @@ export async function analyzeGrammar(text: string, code: UserCode = {}): Promise
     const grammar = doc.parseResult.value as GrammarAST.Grammar;
     const problems = problemsOf(doc, 'grammar');
     const entry = grammar.rules?.find(r => GrammarAST.isParserRule(r) && r.entry)?.name ?? '';
-    const result: GrammarResult = { ok: false, name: grammar.name ?? '', entry, rules: grammar.rules?.length ?? 0, problems, validator: [], generator: [] };
+    const result: GrammarResult = { ok: false, name: grammar.name ?? '', entry, rules: grammar.rules?.length ?? 0, problems, validator: [], generator: [], astSource: '', types: [] };
     if (problems.some(p => p.severity === 'error')) return result;
+    try { Object.assign(result, describeAst(grammar)); } catch { /* the types are a help, not a condition */ }
 
     // The validator file is evaluated first: the classes it exports become services of the language
     // (`services.validation.XValidator`), exactly as the module of a Langium project declares them.

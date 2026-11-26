@@ -7,7 +7,7 @@
   "scripts": {
     "build": "node build.mjs",
     "typecheck": "tsc",
-    "test": "node --experimental-strip-types --no-warnings test/analysis.test.ts && node --experimental-strip-types --no-warnings test/usercode.test.ts && node build.mjs && node test/bundle.test.mjs"
+    "test": "node --experimental-strip-types --no-warnings test/analysis.test.ts && node --experimental-strip-types --no-warnings test/usercode.test.ts && node --experimental-strip-types --no-warnings test/tsservice.test.ts && node --experimental-strip-types --no-warnings test/starter.test.ts && node build.mjs && node test/bundle.test.mjs"
   },
   "dependencies": {
     "langium": "4.4.0"
@@ -25,6 +25,7 @@
     "codemirror": "^6.0.2",
     "esbuild": "^0.28.2",
     "sucrase": "^3.35.1",
-    "typescript": "^7.0.2"
+    "typescript": "^7.0.2",
+    "typescript5": "npm:typescript@^5.9.3"
   }
 }

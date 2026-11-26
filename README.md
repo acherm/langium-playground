@@ -6,8 +6,9 @@ Write a [Langium](https://langium.org/) grammar on the left, programs of your la
 and see on the right the syntax tree (AST) that Langium builds. Errors are shown where they are, in the
 grammar and in the programs.
 
-It is one static page, with Langium **4.4.0** inside. Nothing to install, no server, no account: the
-page also works offline, opened from disk.
+It is one static page (about 7 MB, 2 MB once compressed by the server), with Langium **4.4.0** and a
+TypeScript compiler inside. Nothing to install, no server, no account: the page also works offline,
+opened from disk.
 
 **Highlights**
 
@@ -15,7 +16,11 @@ page also works offline, opened from disk.
   rejected; every error has its line, its column and the phase that found it.
 - **A validator and a generator in TypeScript**, written as in a Langium project (same imports, same
   interfaces) and executed in the page: the checks show up in the programs, the generated text or
-  files in "Output".
+  files in "Output". A language without them gets a **starting file to fill**, written from its
+  grammar: one empty check per node type, a generator that lists what the program contains.
+- **An IDE for that TypeScript**: completion, types and documentation on hover, type errors, go to
+  definition, rename, all against the real declarations of Langium and against the **types of the
+  AST**, derived from the grammar and shown in their own tab.
 - **Editor support in the grammar and in the programs**: completion, go to definition, rename,
   occurrences, hover, formatting of the grammar.
 - **It does not freeze and does not lie**: Langium runs in a web worker with a time limit, and a
@@ -25,8 +30,8 @@ page also works offline, opened from disk.
 - **Nothing is lost**: autosave in the browser, a share link that contains everything, downloads.
 - **No server, no LSP protocol, one HTML file**: Langium's services are called directly.
 - Five examples, two of them complete (grammar, validator, generator): Hello world and Chess-Uno.
-- 31 automated tests of the Langium and user-code sides, and a test of the built file. The interface
-  itself is tested by hand only.
+- 51 automated tests (Langium side, user code, TypeScript service, starting files), and a test of
+  the built file with its two workers. The interface itself is tested by hand only.
 - Written with Claude Code, in one conversation: see [Credits](#credits) and
   [Open questions](#open-questions).
 
@@ -107,13 +112,41 @@ valid programs only. An interpreter is a generator that prints.
 that ends so), `node:fs` and `node:path` (stand-ins: files are collected, not written), and
 `./cli-util.js` for `extractDestinationAndName`. An `import type` of anything is fine.
 
+**Starting a new language.** The button "New language" asks for a name and gives a small grammar that
+works (a list of named elements, one of which can refer to another, and the usual terminals), a
+program of it, and a validator and a generator to fill. Replace the rules with yours.
+
+**Starting from nothing.** An example that has no validator or generator (Chess, VideoGenerator,
+Poll) is loaded with files to fill, and so is a new language. When a tab is empty, "Insert a starting
+point" writes the same file, from the grammar on screen: for the validator, the registration function and a class with one empty check
+per node type (the first four), each with a commented example on a real property; for the generator,
+a function that returns an inventory of the program. Both follow the Langium template, type-check and
+run as they are (this is tested for every example grammar).
+
+**An IDE for these two files.** A TypeScript language service runs in a second web worker, with the
+real type declarations of Langium:
+
+- completion: the properties of a node (`person.` proposes `name`, `$container`...), the services
+  (`services.validation.`), and inside strings the properties `accept` can point to
+  (`{ node: person, property: '` proposes `name`) or the severities;
+- the type and the documentation of anything on hover;
+- type errors, in the list of problems, marked `typescript`;
+- go to definition (F12 or Ctrl/Cmd-click), also into the AST types; rename (F2).
+
+**The types of the AST** are in the tab "AST types", read-only: the interfaces, `isX` guards and `X`
+constants that `langium generate` writes in `generated/ast.ts`, produced by the same code of Langium.
+They follow the grammar as it is edited.
+
 **What differs from a real project, and matters:**
 
-- **Types are erased, not checked.** There is no TypeScript compiler in the page: a type error is not
-  reported, only what fails when the code runs. An error in the code is located (line), on a best
-  effort basis.
-- **`./generated/ast.js` is not generated.** Its type guards (`isPerson`) and constants (`Person`) are
-  answered from the interpreted grammar. Its *types* do not exist here, since types are erased.
+- **Type errors do not prevent the code from running.** In a project, the compiler would stop; here
+  the types are erased (by Sucrase) and the code runs, while the type checker reports on the side.
+  An error at run time is located (line), on a best effort basis.
+- **`./generated/ast.js` is not what runs.** Its types are the generated ones, but when the code
+  runs, the guards (`isPerson`) and constants (`Person`) are answered from the interpreted grammar,
+  and there is no generated reflection class.
+- The file that declares the services (`./hello-world-module.js` in the template) is written for you:
+  it declares `XServices`, with every class the validator exports.
 - One file each: the validator and the generator cannot import each other, nor other files.
 - When the validator does not load, programs are not analysed: they could pass wrongly.
 - **Code from a share link is not run** until the reader presses "Run the code", after reading it.
@@ -221,10 +254,18 @@ request carries the full text, and every answer is checked against the text on s
   the expected warnings, files and text; a syntax error, an error while registering the checks, a
   check that throws, a generator that throws are each reported at the right place; an import that
   is not available is said clearly; each program gets its own output.
-- **A test of the built file** (`test/bundle.test.mjs`): `dist/index.html` contains two inline scripts
-  that parse and no external resource, and the worker code embedded in it, run in a Node sandbox,
-  answers grammar, program and completion requests. This checks that Langium really works once
-  bundled for a browser.
+- **Automated tests of the TypeScript service** (`test/tsservice.test.ts`, 13 tests): the files of
+  the Langium template and of MiniChuno, unchanged, have no type error; type errors are found and
+  located; completion gives the properties of a node, the services, the properties and severities
+  inside strings; hover, go to definition (also into the AST types), rename; the types follow the
+  grammar.
+- **Automated tests of the starting files** (`test/starter.test.ts`, 7 tests): for every example
+  grammar and for a new language, both files type-check and run.
+- **A test of the built file** (`test/bundle.test.mjs`): `dist/index.html` contains the page, two
+  workers and the type declarations, and no external resource. Both workers, run in a Node sandbox
+  that has only what a browser worker has, answer: grammar, program, completion, rename, a validator
+  and a generator in TypeScript for the first; type checking, completion and hover for the second.
+  This checks that Langium and the TypeScript compiler really work once bundled for a browser.
 - **Type checking** of all sources, and a review of the page's logic, which found three defects before
   any use: switching tab could leave the tree of another program on screen; a slow completion could
   kill an analysis under way; a crashed worker was replaced by one that had no grammar.
@@ -251,7 +292,8 @@ feature comes from Langium's default language server and was not checked one by 
 
 | | Official | Here |
 |---|---|---|
-| Validator and generator | none: the grammar only | written in TypeScript as in a Langium project, run in the page |
+| Validator and generator | none: the grammar only | written in TypeScript as in a Langium project, run in the page, with completion and type checking |
+| Types of the AST | not shown | the generated TypeScript declarations, in a tab |
 | Several programs | one | tabs, each with an accepted / rejected mark |
 | Saving | nothing: a reload resets to HelloWorld | autosave in the browser, file downloads |
 | Examples | HelloWorld | five |
@@ -290,6 +332,9 @@ Node.js 22.6 or later.
 |---|---|
 | `src/analysis.ts` | everything that touches Langium: grammar, program, tokens, AST, completion |
 | `src/usercode.ts` | runs the validator and the generator: type erasure, importable modules, error location |
+| `src/tsservice.ts`, `src/tsworker.ts` | the TypeScript language service for these two files, and its worker |
+| `src/starter.ts` | the starting files, written from the grammar |
+| `tools/dts.mjs` | collects the type declarations embedded in the page |
 | `src/worker.ts` | the web worker around both |
 | `src/main.ts` | the page: editors, analysis loop, problem lists, tree, saving and sharing |
 | `src/examples.ts` | the examples (most from [acherm/dsl-langium](https://github.com/acherm/dsl-langium)) |
@@ -326,5 +371,6 @@ source, in the motivation and the comparison, was also done by Claude.
 - One grammar file: `import` of another grammar is not supported.
 - Besides the validator and the generator, Langium's default behaviour only: no custom scoping, no
   other service can be replaced.
-- The validator and the generator are not type-checked (see above).
+- The validator and the generator are type-checked, but a type error does not stop them (see above).
+- The page is large (about 7 MB) because it carries the TypeScript compiler and the declarations.
 - This is not the official playground, which is at https://langium.org/playground/.
