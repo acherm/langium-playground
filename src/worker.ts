@@ -12,12 +12,13 @@ export interface Request {
     name?: string;             // for rename: the new name; for program: the name of the program
     validator?: string;        // for grammar: the TypeScript written next to it
     generator?: string;
+    run?: boolean;             // for program: false = do not run the generator
 }
 
-function answer({ type, target = 'program', text, offset = 0, name = '', validator, generator }: Request): Promise<unknown> {
+function answer({ type, target = 'program', text, offset = 0, name = '', validator, generator, run }: Request): Promise<unknown> {
     switch (type) {
         case 'grammar': return langium.analyzeGrammar(text, { validator, generator });
-        case 'program': return langium.analyzeProgram(text, name || 'program');
+        case 'program': return langium.analyzeProgram(text, name || 'program', run !== false);
         case 'complete': return langium.complete(target, text, offset);
         case 'definition': return langium.definition(target, text, offset);
         case 'occurrences': return langium.occurrences(target, text, offset);

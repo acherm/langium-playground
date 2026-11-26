@@ -116,12 +116,16 @@ interface Tab {
     failure?: string;            // the analysis of (failedKey) failed with this message
     failedKey?: string;
     open: Map<string, boolean>;  // tree nodes the user opened or closed
+    runOnce?: boolean;           // "Run" was pressed: run the generator at the next analysis, whatever the setting
 }
 
 const grammar = { rev: 0, dirty: true, result: undefined as GrammarResult | undefined, resultRev: -1, failure: '' };
 let tabs: Tab[] = [];
 let active = 0;
 let astView: 'tree' | 'json' | 'output' = 'tree';
+/** Whether the generator runs at every change, or only when "Run" is pressed (a preference of this browser). */
+const AUTO_RUN_KEY = 'langium-playground-standalone:auto-run';
+let autoRun = (() => { try { return localStorage.getItem(AUTO_RUN_KEY) !== 'off'; } catch { return true; } })();
 let busy = false;
 let timer = 0;
 let builtIn = -1;                // value of engine.restarts when the grammar was last built
@@ -566,7 +570,9 @@ async function pump() {
             const rev = t.rev, grev = grammar.rev, key = `${grev}:${rev}`;
             if (t.failedKey === key) continue;              // already failed on exactly this input
             try {
-                const result = await engine.call<ProgramResult>('program', textOf(t), PROGRAM_TIMEOUT, { name: t.name });
+                const run = autoRun || !!t.runOnce;
+                t.runOnce = false;
+                const result = await engine.call<ProgramResult>('program', textOf(t), PROGRAM_TIMEOUT, { name: t.name, run });
                 if (!tabs.includes(t) || rev !== t.rev || grev !== grammar.rev) continue;
                 t.result = result; t.resultRev = rev; t.resultGrammarRev = grev; t.failure = undefined; t.failedKey = undefined;
                 apply(t, { effects: setTokens.of(result.tokens) });
@@ -834,7 +840,26 @@ function renderOutput(t: Tab, host: HTMLElement, staleBanner: string) {
         host.append(box);
     };
     if (r.generated === 'none') { note(codeAllowed ? 'No generator. Write one in the "Generator" tab, on the left: a function that receives the AST of the program and returns a text, or writes files.' : 'The generator of this shared link has not been run.'); return; }
+
+    // There is a generator: a button to run it now, and a tick to stop running it at every change.
+    const bar = el('div', 'runbar');
+    const runButton = el('button', 'primary', '▶ Run');
+    runButton.title = 'Run the generator on this program now';
+    runButton.onclick = () => { t.runOnce = true; t.dirty = true; schedule(0); };
+    const tick = document.createElement('input');
+    tick.type = 'checkbox'; tick.checked = autoRun;
+    tick.onchange = () => {
+        autoRun = tick.checked;
+        try { localStorage.setItem(AUTO_RUN_KEY, autoRun ? 'on' : 'off'); } catch { /* private mode */ }
+        if (autoRun) { for (const x of tabs) x.dirty = true; schedule(0); }
+    };
+    const label = el('label');
+    label.append(tick, ' Run automatically at every change');
+    bar.append(runButton, label);
+    host.append(bar);
+
     if (r.generated === 'skipped') { note('The program has errors: the generator was not run.'); return; }
+    if (r.generated === 'paused') { note('The generator has not been run on this version of the program: press "Run".'); return; }
     if (r.generated === 'failed') host.append(el('div', 'banner', `The generator failed: ${r.generatorProblems[0]?.message ?? 'unknown error'} (generator, line ${r.generatorProblems[0]?.line ?? '?'})`));
     const o = r.output;
     if (!o) return;

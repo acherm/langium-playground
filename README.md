@@ -30,7 +30,7 @@ opened from disk.
 - **Nothing is lost**: autosave in the browser, a share link that contains everything, downloads.
 - **No server, no LSP protocol, one HTML file**: Langium's services are called directly.
 - Five examples, two of them complete (grammar, validator, generator): Hello world and Chess-Uno.
-- 51 automated tests (Langium side, user code, TypeScript service, starting files), and a test of
+- 52 automated tests (Langium side, user code, TypeScript service, starting files), and a test of
   the built file with its two workers. The interface itself is tested by hand only.
 - Written with Claude Code, in one conversation: see [Credits](#credits) and
   [Open questions](#open-questions).
@@ -107,6 +107,10 @@ shown in the "Output" view, next to the tree. The function is the default export
 name starts with `generate` (also: `compile`, `transform`, `interpret`, `run`, `toSomething`). It is
 called as the command line of the template calls it: `(model, filePath, destination)`. It runs on
 valid programs only. An interpreter is a generator that prints.
+
+By default the generator runs at every change, of the program, of the grammar or of its own code.
+In "Output", a tick turns this off; the generator then runs only when "Run" is pressed, and the page
+says so when what is shown has not been generated from the current program.
 
 **What can be imported:** `langium`, `langium/generate`, `langium/lsp`, `./generated/ast.js` (any path
 that ends so), `node:fs` and `node:path` (stand-ins: files are collected, not written), and
@@ -249,7 +253,7 @@ request carries the full text, and every answer is checked against the text on s
   proposes keywords and reference targets; definition, occurrences and rename follow the
   cross-references, in a program and in the grammar (a renamed rule leaves a grammar that still
   works); formatting changes the layout only.
-- **Automated tests of the user code side** (`test/usercode.test.ts`, 13 tests, in Node): the
+- **Automated tests of the user code side** (`test/usercode.test.ts`, 14 tests, in Node): the
   validator and the generator of the Langium template, and those of MiniChuno, run unchanged and give
   the expected warnings, files and text; a syntax error, an error while registering the checks, a
   check that throws, a generator that throws are each reported at the right place; an import that

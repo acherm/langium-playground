@@ -132,4 +132,15 @@ await test('each program gets its own output', async () => {
     assert.deepEqual(two.output!.files.map(f => f.path), ['generated/b.js']);
 });
 
+await test('the generator can be left out of an analysis, and run on demand', async () => {
+    await analyzeGrammar(hello.grammar, hello);
+    const paused = await analyzeProgram('person alice\nHello alice !\n', 'a.hello', false);
+    assert.deepEqual([paused.generated, paused.output, paused.problems.length], ['paused', undefined, 1]);    // the validator still runs
+    const asked = await analyzeProgram('person alice\nHello alice !\n', 'a.hello', true);
+    assert.deepEqual([asked.generated, asked.output!.files.map(f => f.path)], ['ok', ['generated/a.js']]);
+    assert.equal((await analyzeProgram('Hello nobody !\n', 'a.hello', false)).generated, 'skipped');
+    await analyzeGrammar(hello.grammar);
+    assert.equal((await analyzeProgram('person Alice\n', 'a.hello', false)).generated, 'none');
+});
+
 console.log(`user code tests passed (${n})`);

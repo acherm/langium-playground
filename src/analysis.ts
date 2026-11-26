@@ -45,8 +45,8 @@ export interface ProgramResult {
     tokens: Token[];
     /** What the parser reported about the grammar while analysing this program (ambiguities). */
     grammarWarnings: Problem[];
-    /** none: no generator. skipped: the program has errors. failed: the generator threw. */
-    generated: 'none' | 'skipped' | 'ok' | 'failed';
+    /** none: no generator. skipped: the program has errors. paused: not asked to run. failed: the generator threw. */
+    generated: 'none' | 'skipped' | 'paused' | 'ok' | 'failed';
     output?: Output;
     /** Where the generator failed on this program (positions are in the generator code). */
     generatorProblems: Problem[];
@@ -302,7 +302,8 @@ function classify(type: string, image: string, terminals: Set<string>, hidden: b
     return 'terminal';
 }
 
-export async function analyzeProgram(text: string, name = 'program'): Promise<ProgramResult> {
+/** `generate`: whether to run the generator on this program (when there is one and the program is valid). */
+export async function analyzeProgram(text: string, name = 'program', generate = true): Promise<ProgramResult> {
     if (!current) throw new Error('No valid grammar.');
     const { terminals, services, generator, env } = current;
     const run = await capturing(async () => {
@@ -324,6 +325,7 @@ export async function analyzeProgram(text: string, name = 'program'): Promise<Pr
         const generatorProblems: Problem[] = [];
         if (generator) {
             if (problems.some(p => p.severity === 'error')) generated = 'skipped';
+            else if (!generate) generated = 'paused';
             else {
                 try { output = await runGenerator(generator.run, doc.parseResult.value, name, env); generated = 'ok'; }
                 catch (e) {
