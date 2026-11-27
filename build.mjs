@@ -24,7 +24,20 @@ const html = fs.readFileSync('src/index.html', 'utf8')
     .replace('<!--TSWORKER-->', () => inline(tsWorker))
     .replace('<!--TSLIBS-->', () => inlineJson(collectDeclarations()))
     .replace('<!--APP-->', () => inline(app));
-fs.mkdirSync('dist', { recursive: true });
+fs.mkdirSync('dist/tour', { recursive: true });
 fs.writeFileSync('dist/index.html', html);
+// .../tour/ opens the page in tour mode (a one-minute guided demonstration, see the end of src/main.ts).
+fs.writeFileSync('dist/tour/index.html', `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Langium playground: the tour</title>
+<meta http-equiv="refresh" content="0; url=../index.html?tour">
+</head>
+<body>
+<p>The tour is starting. If nothing happens, <a href="../index.html?tour">open it here</a>.</p>
+</body>
+</html>
+`);
 const kB = text => `${(text.length / 1024).toFixed(0)} kB`;
 console.log(`dist/index.html  ${kB(html)}  (Langium ${version}; page ${kB(app)}, Langium worker ${kB(worker)}, TypeScript worker ${kB(tsWorker)})`);

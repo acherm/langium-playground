@@ -1,6 +1,7 @@
 # Langium playground, standalone
 
 **Try it: https://blog.mathieuacher.com/langium-playground/**
+· **One-minute tour: https://blog.mathieuacher.com/langium-playground/tour/**
 
 Write a [Langium](https://langium.org/) grammar on the left, programs of your language in the middle,
 and see on the right the syntax tree (AST) that Langium builds. Errors are shown where they are, in the
@@ -39,6 +40,17 @@ opened from disk.
   the built file with its two workers. The interface itself is tested by hand only.
 - Written with Claude Code, in one conversation: see [Credits](#credits) and
   [Open questions](#open-questions).
+
+## The tour
+
+`.../tour/` plays a guided demonstration of about one minute, in eight steps: the grammar of "Chess
+(full game)", its validator refusing an illegal game, the types of the syntax tree, the code of its
+generator, then the page it generates playing a game back on a board; then the state machine,
+Chess-Uno, and a language with files to fill. At each step the relevant piece of code is brought
+into view and selected: the check that replays the game, the function that records the positions,
+the template that writes the rules. It is not a video: it drives the real page (it loads the examples and presses the same tabs a
+visitor would), with a caption for each step and buttons to pause, skip, replay or leave. Nothing is
+saved during the tour, so your own work is untouched and comes back when you open the playground.
 
 ## What this is not
 

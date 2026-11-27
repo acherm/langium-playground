@@ -13,7 +13,10 @@ assert.equal(/<link|src=|https?:\/\/[^"'\s]*\.(js|css)/.test(outside), false, 'n
 for (const s of [scripts[0], scripts[1], scripts[3]]) new vm.Script(s[2]);       // the three programs parse as JavaScript
 const libs = JSON.parse(scripts[2][2]);
 assert.ok(libs['/lib/lib.es5.d.ts'] && libs['/node_modules/langium/package.json']);
-console.log('  ok 1 dist/index.html: page, two workers and the type declarations, all inline; no external resource');
+const tour = fs.readFileSync('dist/tour/index.html', 'utf8');
+assert.match(tour, /<meta http-equiv="refresh" content="0; url=\.\.\/index\.html\?tour">/);
+assert.ok(['id="tour"', 'id="tour-text"', 'id="tour-step"', 'id="tour-progress"', 'id="tour-pause"', 'id="tour-next"', 'id="tour-replay"', 'id="tour-exit"'].every(id => outside.includes(id)));
+console.log('  ok 1 dist/index.html: page, two workers and the type declarations, all inline; no external resource; dist/tour/ opens it in tour mode');
 
 // The TypeScript worker, with only what a browser worker has (no `process`, no `require`).
 {

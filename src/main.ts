@@ -122,6 +122,16 @@ interface Tab {
 const grammar = { rev: 0, dirty: true, result: undefined as GrammarResult | undefined, resultRev: -1, failure: '' };
 let tabs: Tab[] = [];
 let active = 0;
+/** The guided tour (see the end of this file): the page was opened with ?tour. */
+const TOUR = new URLSearchParams(location.search).has('tour');
+/** During the tour, a previewed page is operated automatically, as a visitor would with the mouse. */
+let tourAutoplay = false;
+// Added to a previewed page during the tour only: it presses "Next" if the page has such a button,
+// otherwise one of the buttons of its #events, so that the demonstration moves by itself.
+const TOUR_AUTOPLAY = '<script>(function () { var tick = 0; setInterval(function () { tick++;'
+    + ' var next = document.getElementById("next"); if (next) { if (!next.disabled) next.click(); return; }'
+    + ' if (tick % 3) return; var events = document.querySelectorAll("#events button:not([disabled])");'
+    + ' if (events.length) events[Math.floor(Math.random() * events.length)].click(); }, 350); })();</script>';
 let astView: 'tree' | 'json' | 'output' = 'tree';
 /** Whether the generator runs at every change, or only when "Run" is pressed (a preference of this browser). */
 const AUTO_RUN_KEY = 'langium-playground-standalone:auto-run';
@@ -811,7 +821,7 @@ function renderAst(t: Tab, banner: string) {
         // Same output as what is on screen: leave it alone, so that a preview keeps its state
         // (an analysis that changes nothing must not reload a page the user is clicking in).
         const r = t.result;
-        const key = JSON.stringify([tabs.indexOf(t), r?.generated, r?.output, r?.generatorProblems[0]?.message, banner, host.classList.contains('stale'), autoRun, codeAllowed]);
+        const key = JSON.stringify([tabs.indexOf(t), r?.generated, r?.output, r?.generatorProblems[0]?.message, banner, host.classList.contains('stale'), autoRun, codeAllowed, tourAutoplay]);
         if (host.dataset.output === key && host.childElementCount > 0) return;
         host.replaceChildren();
         renderOutput(t, host, banner);
@@ -883,7 +893,7 @@ function renderOutput(t: Tab, host: HTMLElement, staleBanner: string) {
         frame.className = 'preview';
         frame.title = `Preview of ${title}`;
         frame.setAttribute('sandbox', 'allow-scripts');
-        frame.srcdoc = text;
+        frame.srcdoc = tourAutoplay ? text + TOUR_AUTOPLAY : text;
         const source = document.createElement('details');
         source.append(el('summary', '', 'Source'), el('pre', '', text));
         box.append(el('div', 'file-name', `${title} · preview`), frame, source);
@@ -979,6 +989,7 @@ const fromExample = (ex: (typeof EXAMPLES)[number]): Saved =>
     ({ g: ex.grammar, v: ex.validator ?? '', x: ex.generator ?? '', p: ex.programs.map(p => ({ n: p.name, t: p.text })), a: 0 });
 
 function save() {
+    if (TOUR) return;       // the tour never touches what the visitor saved
     try { localStorage.setItem(KEY, JSON.stringify(snapshot())); } catch { /* private mode: nothing to do */ }
 }
 
@@ -1127,8 +1138,109 @@ for (const handle of document.querySelectorAll<HTMLElement>('.split')) {
     };
 }
 
-// Start: a shared link wins over what this browser remembers, which wins over the first example.
+// ---------------------------------------------------------------- the tour
+// A one-minute guided demonstration, at .../tour/ (which opens this page with ?tour). It drives the
+// real page: it loads examples and presses the same tabs a visitor would. Nothing is saved during
+// the tour, so the work of the visitor is untouched and comes back when the tour is left.
+
+interface TourStep { seconds: number; text: string; run: () => void | Promise<void> }
+
+const openExample = (name: string) => { const ex = EXAMPLES.find(e => e.name === name); if (ex) load(fromExample(ex), true); };
+const openProgram = (name: string) => { const i = tabs.findIndex(t => t.name === name); if (i >= 0) select(i); };
+const openView = (view: (typeof VIEWS)[number]) => $(`view-${view}`).click();
+/** Waits until the program on screen has been analysed (or two seconds have passed). */
+async function analysed() {
+    for (let i = 0; i < 20 && !fresh(tab()); i++) await new Promise(r => setTimeout(r, 100));
+}
+
+/** Shows a piece of code: opens its tab, puts the line that contains `needle` at the top and selects `lines` lines from it. */
+function reveal(side: Left, needle: string, lines: number) {
+    selectLeft(side);
+    const view = leftViews[side], doc = view.state.doc;
+    const at = doc.toString().indexOf(needle);
+    if (at < 0) return;
+    const first = doc.lineAt(at), last = doc.line(Math.min(doc.lines, first.number + lines - 1));
+    view.dispatch({ selection: { anchor: first.from, head: last.to }, effects: EditorView.scrollIntoView(first.from, { y: 'start', yMargin: 6 }) });
+}
+
+const TOUR_STEPS: TourStep[] = [
+    {
+        seconds: 7, text: 'A grammar. From it, Langium builds a parser: the game of chess in the middle becomes the syntax tree on the right.',
+        run: () => { tourAutoplay = false; openExample('Chess (full game)'); selectLeft('grammar'); openView('tree'); },
+    },
+    {
+        seconds: 8, text: 'A validator, in TypeScript with the API of Langium. Its check replays the game on a board, move after move: the grammar accepts this game, the validator refuses the third move.',
+        run: async () => {
+            openProgram('illegal.chess');
+            reveal('validator', 'checkGame(game: Game', 22);
+            await analysed();
+            document.querySelector<HTMLElement>('#program-problems .problem')?.click();
+        },
+    },
+    {
+        seconds: 5, text: 'The types of the syntax tree are derived from the grammar. The validator and the generator are checked against them, with completion, as in an IDE.',
+        run: () => reveal('ast', 'export interface PieceMove', 12),
+    },
+    {
+        seconds: 8, text: 'A generator, in TypeScript too: a function from the syntax tree to anything. This one replays the game with the rules of the validator and keeps every position.',
+        run: () => { openProgram('opera.chess'); reveal('generator', 'function framesOf', 17); openView('output'); },
+    },
+    {
+        seconds: 12, text: 'What it generates: a web page that plays the game back (Morphy, Paris, 1858). The tour presses "Next" for you.',
+        run: () => { reveal('generator', 'export function generateHtml', 24); tourAutoplay = true; $('ast').dataset.output = ''; openView('output'); },
+    },
+    {
+        seconds: 7, text: 'Another language: state machines, from the Langium showcase. A few lines turn a machine into plain data; the generated page makes it clickable.',
+        run: () => { openExample('State machine'); reveal('generator', 'function toData', 14); openView('output'); },
+    },
+    {
+        seconds: 6, text: 'Chess-Uno: a card decides how many moves you play. Here the generator is a template: it writes the rules of each game in English.',
+        run: () => { openExample('Chess-Uno'); reveal('generator', 'export function toRulesText', 20); openView('output'); },
+    },
+    {
+        seconds: 6, text: 'Your turn. Any grammar comes with a validator and a generator to fill. Nothing to install: all of this runs in your browser.',
+        run: () => { tourAutoplay = false; openExample('Poll'); selectLeft('validator'); openView('tree'); },
+    },
+];
+
+async function runTour() {
+    const bar = $('tour'), caption = $('tour-text'), counter = $('tour-step'), progress = $('tour-progress');
+    const pause = $('tour-pause'), skip = $('tour-next');
+    let paused = false, skipped = false;
+    document.body.classList.add('touring');      // keeps a band free at the bottom: the caption hides nothing
+    bar.hidden = false;
+    pause.onclick = () => { paused = !paused; pause.textContent = paused ? 'Resume' : 'Pause'; };
+    skip.onclick = () => { skipped = true; };
+    $('tour-exit').onclick = () => { location.href = location.pathname; };       // the page without ?tour: the visitor's own work
+    for (;;) {
+        pause.hidden = skip.hidden = false;
+        for (const [i, step] of TOUR_STEPS.entries()) {
+            counter.textContent = `${i + 1} / ${TOUR_STEPS.length}`;
+            caption.textContent = step.text;
+            try { await step.run(); } catch { /* a step that fails must not stop the tour */ }
+            skipped = false;
+            for (let elapsed = 0; elapsed < step.seconds * 1000 && !skipped;) {
+                await new Promise(r => setTimeout(r, 100));
+                if (!paused) elapsed += 100;
+                progress.style.width = `${Math.min(100, elapsed / (step.seconds * 10))}%`;
+            }
+        }
+        // The end: stay on the last screen until the visitor chooses.
+        counter.textContent = 'End';
+        caption.textContent = 'That was the tour. The playground opens with your own work, or with a first example.';
+        progress.style.width = '100%';
+        pause.hidden = skip.hidden = true;
+        const replay = $('tour-replay');
+        replay.hidden = false;
+        await new Promise<void>(resolve => { replay.onclick = () => resolve(); });
+        replay.hidden = true;
+    }
+}
+
+// Start: the tour if it was asked for; otherwise a shared link wins over what this browser
+// remembers, which wins over the first example.
 (async () => {
+    if (TOUR) { void runTour(); return; }
     let stored: Saved | undefined;
     try { stored = JSON.parse(localStorage.getItem(KEY) ?? 'null') ?? undefined; } catch { /* ignore */ }
     load(stored?.g != null ? stored : fromExample(EXAMPLES[0]));

@@ -16,7 +16,9 @@
     </label>
     <button id="download-grammar" title="Download the grammar as a .langium file">Download grammar</button>
     <button id="download-program" title="Download the current program">Download program</button>
-    <button id="share" class="primary" title="Copy a link that contains the grammar and the programs">Copy share link</button>
+    <button id="share" class="primary" title="Copy a link that contains the grammar, the validator, the generator and the programs">Copy share link</button>
+    <a class="repo tour-link" href="tour/index.html" title="A one-minute guided tour of the playground">Tour</a>
+    <a class="repo" href="https://github.com/acherm/langium-playground" target="_blank" rel="noopener" title="Source code, documentation and issues (opens in a new tab)">GitHub</a>
   </div>
 </header>
 
@@ -65,6 +67,19 @@
   <span id="timing"></span>
 </footer>
 <div id="toast" role="status" aria-live="polite" hidden></div>
+<div id="tour" role="region" aria-label="Guided tour" hidden>
+  <div class="tour-line">
+    <span id="tour-step"></span>
+    <span id="tour-text" aria-live="polite"></span>
+  </div>
+  <div class="tour-actions">
+    <div class="tour-bar"><div id="tour-progress"></div></div>
+    <button id="tour-pause">Pause</button>
+    <button id="tour-next">Next</button>
+    <button id="tour-replay" hidden>Replay</button>
+    <button id="tour-exit" class="primary">Open the playground</button>
+  </div>
+</div>
 
 <script type="text/plain" id="worker-source"><!--WORKER--></script>
 <script type="text/plain" id="ts-worker-source"><!--TSWORKER--></script>
