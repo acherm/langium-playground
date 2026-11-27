@@ -5,9 +5,10 @@
   "description": "A standalone Langium playground: one static page, Langium in a web worker.",
   "type": "module",
   "scripts": {
-    "build": "node build.mjs",
-    "typecheck": "tsc",
-    "test": "node --experimental-strip-types --no-warnings test/analysis.test.ts && node --experimental-strip-types --no-warnings test/usercode.test.ts && node --experimental-strip-types --no-warnings test/tsservice.test.ts && node --experimental-strip-types --no-warnings test/starter.test.ts && node --experimental-strip-types --no-warnings test/statemachine.test.ts && node build.mjs && node test/bundle.test.mjs"
+    "embed": "node tools/embed-examples.mjs",
+    "build": "node tools/embed-examples.mjs && node build.mjs",
+    "typecheck": "node tools/embed-examples.mjs && tsc",
+    "test": "node tools/embed-examples.mjs && node --experimental-strip-types --no-warnings test/analysis.test.ts && node --experimental-strip-types --no-warnings test/usercode.test.ts && node --experimental-strip-types --no-warnings test/tsservice.test.ts && node --experimental-strip-types --no-warnings test/starter.test.ts && node --experimental-strip-types --no-warnings test/statemachine.test.ts && node --experimental-strip-types --no-warnings test/chess.test.ts && node build.mjs && node test/bundle.test.mjs"
   },
   "dependencies": {
     "langium": "4.4.0"

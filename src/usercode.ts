@@ -26,12 +26,14 @@ interface Reflection { getAllTypes(): string[]; isInstance(node: unknown, type: 
 /** What a piece of user code can reach; filled in as the language is built and the code runs. */
 export interface Environment {
     reflection?: Reflection;
+    /** What the validator file exports, once loaded: the generator can import it. */
+    validator?: Record<string, any>;
     output: Output;
 }
 
 export const newOutput = (): Output => ({ files: [], console: [] });
 
-const AVAILABLE = "'langium', 'langium/generate', 'langium/lsp', './generated/ast.js', 'node:fs', 'node:path', './cli-util.js'";
+const AVAILABLE = "'langium', 'langium/generate', 'langium/lsp', './generated/ast.js', 'node:fs', 'node:path', './cli-util.js', and from the generator the validator file ('../language/x-validator.js')";
 
 // ---- the modules user code can import
 
@@ -104,6 +106,11 @@ function requireFor(env: Environment) {
         if (/^(node:)?fs$/.test(specifier)) return fsModule(env);
         if (/^(node:)?path$/.test(specifier)) return pathModule;
         if (/(^|\/)ast(\.js|\.ts)?$/.test(specifier)) return astModule(env);
+        if (/validator(\.js|\.ts)?$/.test(specifier) && specifier.startsWith('.')) {
+            // The generator shares code with the validator, as two files of a project would.
+            if (!env.validator) throw new Error(`Cannot import '${specifier}': there is no validator, or it could not be loaded.`);
+            return env.validator;
+        }
         if (/(^|\/)(cli-)?util(\.js|\.ts)?$/.test(specifier)) return cliUtilModule;
         throw new Error(`Cannot import '${specifier}'. In the playground a file can import: ${AVAILABLE}. (An \`import type\` of anything else is fine: types are erased.)`);
     };

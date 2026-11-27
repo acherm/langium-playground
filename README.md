@@ -30,11 +30,12 @@ opened from disk.
 - **Nothing is lost**: autosave in the browser, a share link that contains everything, downloads.
 - **No server, no LSP protocol, one HTML file**: Langium's services are called directly.
 - **A generated web page runs in the page**: the state machine of the Langium showcase, with a
-  generator that makes it interactive.
-- Six examples, three of them complete (grammar, validator, generator): Hello world, Chess-Uno and
-  State machine. The others come with files to fill.
-- 59 automated tests (Langium side, user code, TypeScript service, starting files, the state machine
-  and its generated page), and a test of
+  generator that makes it interactive; and **complete games of chess**, checked by a validator that
+  knows the rules and played back on a board, move by move.
+- Seven examples, four of them complete (grammar, validator, generator): Hello world, Chess (full
+  game), Chess-Uno and State machine. The others come with files to fill.
+- 67 automated tests (Langium side, user code, TypeScript service, starting files, the state machine
+  and the chess example with their generated pages), and a test of
   the built file with its two workers. The interface itself is tested by hand only.
 - Written with Claude Code, in one conversation: see [Credits](#credits) and
   [Open questions](#open-questions).
@@ -72,7 +73,7 @@ name under the cursor, documentation comments on hover. The grammar can be forma
 What you get, besides: several programs in tabs, each with an accepted / rejected mark; a hover that
 tells whether the lexer read a word as a keyword or as a terminal; the tree as JSON; highlighting of
 a tree node's text; autosave in the browser; a share link that contains everything; downloads.
-Examples: Hello world, Chess, VideoGenerator, Poll, Chess-Uno, State machine.
+Examples: Hello world, Chess, Chess (full game), VideoGenerator, Poll, Chess-Uno, State machine.
 
 ## A validator and a generator, in TypeScript
 
@@ -125,7 +126,25 @@ says so when what is shown has not been generated from the current program.
 
 **What can be imported:** `langium`, `langium/generate`, `langium/lsp`, `./generated/ast.js` (any path
 that ends so), `node:fs` and `node:path` (stand-ins: files are collected, not written), and
-`./cli-util.js` for `extractDestinationAndName`. An `import type` of anything is fine.
+`./cli-util.js` for `extractDestinationAndName`. An `import type` of anything is fine. The generator
+can also import what the validator file exports (`'../language/x-validator.js'`, any path that ends
+in `validator.js`), to share code with it.
+
+**A larger example: "Chess (full game)".** Its files are in
+[`examples/chess-full-game/`](examples/chess-full-game/), as real files.
+
+- The *grammar* writes a complete game in long algebraic notation: `e2-e4`, `Ng1-f3`, `d4xe5`,
+  `O-O`, `O-O-O`, `e7-e8=Q`, `+`, `#`, numbered turns, players, result. It says how a game is
+  written, not whether it is chess.
+- The *validator* replays the game on a board. It rejects a move that is not legal (no piece on the
+  square, wrong side, a piece that does not move that way, a way that is not free, castling when it
+  is not allowed, en passant too late, a missing promotion, a king left in check), and it checks that
+  the notation tells the truth (the piece letter, `x`, `+`, `#`, the result). The rules of chess are
+  in the second half of the file, independent of Langium.
+- The *generator* imports those rules, replays the game, and writes a page: the board, the list of
+  moves, and buttons (or the arrow keys) for the previous and the next move.
+- Three programs: the Opera Game (Morphy, 1858), a short game with every special move, and a game
+  that the grammar accepts and the validator rejects. The small "Chess" example is unchanged.
 
 **Starting a new language.** The button "New language" asks for a name and gives a small grammar that
 works (a list of named elements, one of which can refer to another, and the usual terminals), a
@@ -162,7 +181,7 @@ They follow the grammar as it is edited.
   and there is no generated reflection class.
 - The file that declares the services (`./hello-world-module.js` in the template) is written for you:
   it declares `XServices`, with every class the validator exports.
-- One file each: the validator and the generator cannot import each other, nor other files.
+- One file each. The generator can import the validator; there are no other files.
 - When the validator does not load, programs are not analysed: they could pass wrongly.
 - **Code from a share link is not run** until the reader presses "Run the code", after reading it.
   The code runs in the web worker: it has no access to the page nor to what the browser saved, and a
@@ -274,8 +293,14 @@ request carries the full text, and every answer is checked against the text on s
   located; completion gives the properties of a node, the services, the properties and severities
   inside strings; hover, go to definition (also into the AST types), rename; the types follow the
   grammar.
-- **Automated tests of the starting files** (`test/starter.test.ts`, 8 tests): for every example
+- **Automated tests of the starting files** (`test/starter.test.ts`, 9 tests): for every example
   grammar and for a new language, both files type-check and run.
+- **Automated tests of the chess example** (`test/chess.test.ts`, 7 tests): the Opera Game is
+  accepted move for move, with each capture, check and the checkmate confirmed; so is a game with en
+  passant, promotions and castling; 27 situations (a wrong piece letter, a blocked way, castling
+  across an attacked square, an ignored check, a false checkmate...) each give the expected message;
+  the script of the generated page is run against a stand-in for a document: next, previous, jump
+  to a move, keyboard, and the right pieces on the right squares at each step.
 - **Automated tests of the state machine example** (`test/statemachine.test.ts`, 6 tests): the
   validator of the Langium examples, unchanged, type-checks and gives its warnings and errors; the
   script of the generated page is run against a stand-in for a document, and the machine behaves
@@ -357,6 +382,7 @@ Node.js 22.6 or later.
 | `src/worker.ts` | the web worker around both |
 | `src/main.ts` | the page: editors, analysis loop, problem lists, tree, saving and sharing |
 | `src/examples.ts` | the examples (most from [acherm/dsl-langium](https://github.com/acherm/dsl-langium)) |
+| `examples/chess-full-game/` | the chess example, as real files; `tools/embed-examples.mjs` copies them into `src/examples.generated.ts` |
 | `src/index.html`, `src/style.css` | markup and styles |
 | `build.mjs` | bundles everything into `dist/index.html` |
 

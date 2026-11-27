@@ -1,0 +1,16 @@
+// Not a good game, but every special move of chess in eight turns:
+// a capture en passant, two promotions, a castling, and a check.
+game "Special moves"
+white "White"
+black "Black"
+
+1. e2-e4 a7-a5
+2. e4-e5 d7-d5
+3. e5xd6 a5-a4          // en passant: the pawn that just jumped to d5 is taken on d6
+4. d6xc7 a4-a3
+5. c7xd8=Q+ Ke8xd8      // a promotion that gives check; the king takes the new queen
+6. Ng1-f3 a3xb2
+7. Bf1-c4 b2xa1=Q       // Black promotes too
+8. O-O Qa1xb1           // White castles on the king side
+
+result *

@@ -1,6 +1,8 @@
 // The examples of the course, copied from https://github.com/acherm/dsl-langium (Langium 4.4).
 import { CHUNO_GENERATOR, CHUNO_VALIDATOR, HELLO_GENERATOR, HELLO_VALIDATOR, STATEMACHINE_GENERATOR, STATEMACHINE_VALIDATOR } from './example-code.ts';
 
+import { CHESS_FULL_GAME } from './examples.generated.ts';
+
 export interface Example { name: string; grammar: string; programs: { name: string; text: string }[]; validator?: string; generator?: string }
 
 export const EXAMPLES: Example[] = [
@@ -292,3 +294,8 @@ end
     validator: STATEMACHINE_VALIDATOR,
     generator: STATEMACHINE_GENERATOR,
 });
+
+// Chess (full game): a complete game in long algebraic notation, a validator that knows the rules
+// of chess, and a generator to a page that plays the game back. Its files are in
+// examples/chess-full-game/. It comes right after the small Chess example.
+EXAMPLES.splice(2, 0, CHESS_FULL_GAME);

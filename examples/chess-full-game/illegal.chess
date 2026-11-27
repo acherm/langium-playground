@@ -1,0 +1,10 @@
+// The grammar accepts this game: every move is well written.
+// The validator rejects it: the third move of White is not a move of chess.
+game "A bishop that jumps"
+
+1. e2-e4 e7-e5
+2. Ng1-f3 Nb8-c6
+3. Bf1-c5 Ng8-f6        // from f1 a bishop reaches c4, not c5
+4. O-O d7-d6
+
+result 1/2-1/2

@@ -145,6 +145,7 @@ export function createService(libs: Record<string, string>) {
         if (/(^|\/)ast(\.js|\.ts)?$/.test(specifier)) return PATHS.ast;
         if (/module(\.js|\.ts)?$/.test(specifier) && specifier.startsWith('.')) return PATHS.module;
         if (/(^|\/)(cli-)?util(\.js|\.ts)?$/.test(specifier)) return PATHS.util;
+        if (/validator(\.js|\.ts)?$/.test(specifier) && specifier.startsWith('.')) return PATHS.validator;     // the generator imports the validator
         return undefined;
     }
 

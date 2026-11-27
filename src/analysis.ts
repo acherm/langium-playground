@@ -204,7 +204,7 @@ export async function analyzeGrammar(text: string, code: UserCode = {}): Promise
     const validatorCode = code.validator?.trim() ? code.validator : '';
     let validator: Record<string, any> | undefined;
     if (validatorCode) {
-        try { validator = load(validatorCode, 'validator.ts', env).exports; }
+        try { validator = env.validator = load(validatorCode, 'validator.ts', env).exports; }
         catch (e) { result.validator.push(inCode(validatorCode, e, 'validator.ts', 'validator')); }
     }
     const module = { validation: Object.fromEntries(exportedClasses(validator ?? {}).map(([name, Class]) => [name, (services: unknown) => new Class(services)])) };
