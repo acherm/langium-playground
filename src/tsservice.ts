@@ -70,11 +70,39 @@ const CLI_UTIL = `export interface FilePathData { destination: string; name: str
 export declare function extractDestinationAndName(filePath: string, destination: string | undefined): FilePathData;
 `;
 
+/**
+ * The names that the two files import from a module whose path matches `from`.
+ * In a Langium project, `XAstType` and `XServices` are named after the project (langium-config.json),
+ * which need not be the name of the grammar: the names the code asks for are accepted as aliases.
+ */
+function importedNames(sources: Sources, from: RegExp, suffix: string): string[] {
+    const names = new Set<string>();
+    for (const text of [sources.validator, sources.generator]) {
+        for (const m of text.matchAll(/import\s+(?:type\s+)?\{([^}]*)\}\s*from\s*['"]([^'"]+)['"]/g)) {
+            if (!from.test(m[2])) continue;
+            for (const part of m[1].split(',')) {
+                const name = part.trim().replace(/^type\s+/, '').split(/\s+as\s+/)[0].trim();
+                if (name.endsWith(suffix) && /^[A-Za-z_$][\w$]*$/.test(name)) names.add(name);
+            }
+        }
+    }
+    return [...names];
+}
+
+/** The AST types, plus an alias for each other name under which the code imports the `XAstType` map. */
+function astSourceFor(sources: Sources): string {
+    const ast = sources.ast || "import * as langium from 'langium';\n";
+    const own = `${sources.name || 'My'}AstType`;
+    const aliases = importedNames(sources, /(^|\/)ast(\.js|\.ts)?$/, 'AstType').filter(n => !new RegExp(`\\b(type|interface|const|function)\\s+${n.replace(/\$/g, '\\$')}\\b`).test(ast));
+    return ast + aliases.map(n => `\nexport type ${n} = ${own};\n`).join('');
+}
+
 /** The module of a Langium project declares the services of the language: here, the validator classes. */
 function moduleSource(sources: Sources): string {
     const classes = [...sources.validator.matchAll(/^\s*export\s+class\s+([A-Za-z_$][\w$]*)/gm)].map(m => m[1]);
     const name = sources.name || 'My';
-    return `import type { LangiumServices } from 'langium/lsp';
+    const aliases = importedNames(sources, /module(\.js|\.ts)?$/, 'Services').filter(n => n !== `${name}Services` && n !== `${name}AddedServices`);
+    return `${aliases.map(n => `export type ${n} = ${name}Services;\n`).join('')}import type { LangiumServices } from 'langium/lsp';
 ${classes.length ? `import type { ${classes.join(', ')} } from './validator.js';\n` : ''}
 /** The services that this language adds to the default ones of Langium. */
 export type ${name}AddedServices = {
@@ -145,7 +173,7 @@ export function createService(libs: Record<string, string>) {
     function update(sources: Sources) {
         set(PATHS.validator, sources.validator);
         set(PATHS.generator, sources.generator);
-        set(PATHS.ast, sources.ast || "import * as langium from 'langium';\n");
+        set(PATHS.ast, astSourceFor(sources));
         set(PATHS.module, moduleSource(sources));
     }
     update({ validator: '', generator: '', ast: '', name: '' });

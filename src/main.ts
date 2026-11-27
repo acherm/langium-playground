@@ -807,8 +807,19 @@ function countNodes(v: any): number {
 
 function renderAst(t: Tab, banner: string) {
     const host = $('ast');
+    if (astView === 'output') {
+        // Same output as what is on screen: leave it alone, so that a preview keeps its state
+        // (an analysis that changes nothing must not reload a page the user is clicking in).
+        const r = t.result;
+        const key = JSON.stringify([tabs.indexOf(t), r?.generated, r?.output, r?.generatorProblems[0]?.message, banner, host.classList.contains('stale'), autoRun, codeAllowed]);
+        if (host.dataset.output === key && host.childElementCount > 0) return;
+        host.replaceChildren();
+        renderOutput(t, host, banner);
+        host.dataset.output = key;
+        return;
+    }
+    host.dataset.output = '';
     host.replaceChildren();
-    if (astView === 'output') { renderOutput(t, host, banner); return; }
     if (banner) host.append(el('div', 'banner', banner));
     if (!t.result) return;
     const root = JSON.parse(t.result.ast);
@@ -863,8 +874,23 @@ function renderOutput(t: Tab, host: HTMLElement, staleBanner: string) {
     if (r.generated === 'failed') host.append(el('div', 'banner', `The generator failed: ${r.generatorProblems[0]?.message ?? 'unknown error'} (generator, line ${r.generatorProblems[0]?.line ?? '?'})`));
     const o = r.output;
     if (!o) return;
-    for (const f of o.files) block(f.path, f.content);
-    if (o.result !== undefined) block(o.files.length ? 'returned value' : 'result', o.result);
+    // A generated web page is shown running, in a frame that is isolated from this page (it can run
+    // its scripts, but has no access to the playground, to what the browser saved, or to this site).
+    const isPage = (path: string, text: string) => /\.html?$/i.test(path) || /^\s*<!doctype html/i.test(text);
+    const page = (title: string, text: string) => {
+        const box = el('div', 'file');
+        const frame = document.createElement('iframe');
+        frame.className = 'preview';
+        frame.title = `Preview of ${title}`;
+        frame.setAttribute('sandbox', 'allow-scripts');
+        frame.srcdoc = text;
+        const source = document.createElement('details');
+        source.append(el('summary', '', 'Source'), el('pre', '', text));
+        box.append(el('div', 'file-name', `${title} · preview`), frame, source);
+        host.append(box);
+    };
+    for (const f of o.files) (isPage(f.path, f.content) ? page : block)(f.path, f.content);
+    if (o.result !== undefined) (isPage('', o.result) ? page : block)(o.files.length ? 'returned value' : 'result', o.result);
     if (o.console.length) block('console', o.console.join('\n'));
     if (r.generated === 'ok' && !o.files.length && o.result === undefined && !o.console.length) note('The generator returned nothing, wrote no file and printed nothing.');
 }

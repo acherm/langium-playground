@@ -1,5 +1,5 @@
 // The examples of the course, copied from https://github.com/acherm/dsl-langium (Langium 4.4).
-import { CHUNO_GENERATOR, CHUNO_VALIDATOR, HELLO_GENERATOR, HELLO_VALIDATOR } from './example-code.ts';
+import { CHUNO_GENERATOR, CHUNO_VALIDATOR, HELLO_GENERATOR, HELLO_VALIDATOR, STATEMACHINE_GENERATOR, STATEMACHINE_VALIDATOR } from './example-code.ts';
 
 export interface Example { name: string; grammar: string; programs: { name: string; text: string }[]; validator?: string; generator?: string }
 
@@ -173,3 +173,122 @@ win by checkmate
 
 EXAMPLES[0].validator = HELLO_VALIDATOR;
 EXAMPLES[0].generator = HELLO_GENERATOR;
+
+// State machine: the grammar, the validator and the traffic light are those of the Langium examples
+// (eclipse-langium/langium, examples/statemachine, MIT License), shown at langium.org/showcase.
+// The generator produces an interactive page, which the playground shows as a live preview.
+EXAMPLES.push({
+    name: 'State machine',
+    grammar: String.raw`grammar StatemachineModel
+
+/** A textual representation of a state machine */
+entry Statemachine:
+    'statemachine'
+    /** The name of the machine */
+    name=ID
+    ('events'
+        /** The list of recognized event names */
+        events+=Event+)?
+    ('commands'    commands+=Command+)?
+    'initialState'
+    /** The starting state for the machine */
+    init=[State]
+    /** Definitions of available states */
+    states+=State*;
+
+/** An event is the trigger for a transition */
+Event:
+    name=ID;
+
+Command:
+    name=ID;
+
+/** A description of the status of a system */
+State:
+    'state' name=ID
+        ('actions' '{' actions+=[Command]+ '}')?
+        /** The transitions to other states that can take place from the current one */
+        transitions+=Transition*
+    'end';
+
+/** A change from one state to another */
+Transition:
+    /** The event triggering the transition */
+    event=[Event] '=>'
+    /** The target state */
+    state=[State];
+
+hidden terminal WS: /\s+/;
+terminal ID: /[_a-zA-Z][\w_]*/;
+
+hidden terminal ML_COMMENT: /\/\*[\s\S]*?\*\//;
+hidden terminal SL_COMMENT: /\/\/[^\n\r]*/;
+`,
+    programs: [
+        {
+            name: 'trafficlight.statemachine',
+            text: `statemachine TrafficLight
+
+events
+    switchCapacity
+    next
+
+initialState PowerOff
+
+state PowerOff
+    switchCapacity => RedLight
+end
+
+state RedLight
+    switchCapacity => PowerOff
+    next => GreenLight
+end
+
+state YellowLight
+    switchCapacity => PowerOff
+    next => RedLight
+end
+
+state GreenLight
+    switchCapacity => PowerOff
+    next => YellowLight
+end
+`,
+        },
+        {
+            name: 'turnstile.statemachine',
+            text: `// A turnstile: a coin unlocks it, pushing through locks it again.
+statemachine Turnstile
+
+events
+    coin
+    push
+
+commands
+    lock
+    unlock
+    refund
+
+initialState Locked
+
+state Locked
+    actions { lock }
+    coin => Unlocked
+end
+
+state Unlocked
+    actions { unlock }
+    push => Locked
+    coin => Refunding
+end
+
+state Refunding
+    actions { refund }
+    push => Locked
+end
+`,
+        },
+    ],
+    validator: STATEMACHINE_VALIDATOR,
+    generator: STATEMACHINE_GENERATOR,
+});

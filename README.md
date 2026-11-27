@@ -29,8 +29,12 @@ opened from disk.
   rule concerned.
 - **Nothing is lost**: autosave in the browser, a share link that contains everything, downloads.
 - **No server, no LSP protocol, one HTML file**: Langium's services are called directly.
-- Five examples, two of them complete (grammar, validator, generator): Hello world and Chess-Uno.
-- 52 automated tests (Langium side, user code, TypeScript service, starting files), and a test of
+- **A generated web page runs in the page**: the state machine of the Langium showcase, with a
+  generator that makes it interactive.
+- Six examples, three of them complete (grammar, validator, generator): Hello world, Chess-Uno and
+  State machine. The others come with files to fill.
+- 59 automated tests (Langium side, user code, TypeScript service, starting files, the state machine
+  and its generated page), and a test of
   the built file with its two workers. The interface itself is tested by hand only.
 - Written with Claude Code, in one conversation: see [Credits](#credits) and
   [Open questions](#open-questions).
@@ -68,7 +72,7 @@ name under the cursor, documentation comments on hover. The grammar can be forma
 What you get, besides: several programs in tabs, each with an accepted / rejected mark; a hover that
 tells whether the lexer read a word as a keyword or as a terminal; the tree as JSON; highlighting of
 a tree node's text; autosave in the browser; a share link that contains everything; downloads.
-Examples: Hello world, Chess, VideoGenerator, Poll, Chess-Uno.
+Examples: Hello world, Chess, VideoGenerator, Poll, Chess-Uno, State machine.
 
 ## A validator and a generator, in TypeScript
 
@@ -107,6 +111,13 @@ shown in the "Output" view, next to the tree. The function is the default export
 name starts with `generate` (also: `compile`, `transform`, `interpret`, `run`, `toSomething`). It is
 called as the command line of the template calls it: `(model, filePath, destination)`. It runs on
 valid programs only. An interpreter is a generator that prints.
+
+**A generated web page is shown running.** When the generator writes an `.html` file (or returns a
+page), "Output" shows it live, in a frame isolated from the playground, with its source below. This
+is how the example "State machine" gets its view: its generator turns a machine into a page with the
+states, the current one highlighted, and one button per event. The grammar, the validator and the
+traffic light of that example are those of the
+[Langium showcase](https://langium.org/showcase/statemachine/), unchanged.
 
 By default the generator runs at every change, of the program, of the grammar or of its own code.
 In "Output", a tick turns this off; the generator then runs only when "Run" is pressed, and the page
@@ -263,8 +274,12 @@ request carries the full text, and every answer is checked against the text on s
   located; completion gives the properties of a node, the services, the properties and severities
   inside strings; hover, go to definition (also into the AST types), rename; the types follow the
   grammar.
-- **Automated tests of the starting files** (`test/starter.test.ts`, 7 tests): for every example
+- **Automated tests of the starting files** (`test/starter.test.ts`, 8 tests): for every example
   grammar and for a new language, both files type-check and run.
+- **Automated tests of the state machine example** (`test/statemachine.test.ts`, 6 tests): the
+  validator of the Langium examples, unchanged, type-checks and gives its warnings and errors; the
+  script of the generated page is run against a stand-in for a document, and the machine behaves
+  (current state, events that are possible, steps, reset).
 - **A test of the built file** (`test/bundle.test.mjs`): `dist/index.html` contains the page, two
   workers and the type declarations, and no external resource. Both workers, run in a Node sandbox
   that has only what a browser worker has, answer: grammar, program, completion, rename, a validator
